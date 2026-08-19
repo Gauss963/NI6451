@@ -7,10 +7,10 @@ to DAQWorker / FinalizeWorker.
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QComboBox, QMessageBox,
-    QGroupBox, QFormLayout
+    QGroupBox, QFormLayout, QCheckBox, QLineEdit
 )
 
-from config import RATE, CHUNK, FLUSH_INTERVAL_SEC
+from config import RATE, CHUNK, FLUSH_INTERVAL_SEC, DEFAULT_TRIGGER_LINE, DEFAULT_CAPTURE_TRIGGER
 from daq_worker import DAQWorker
 from finalize_worker import FinalizeWorker
 from devices import list_devices
@@ -51,6 +51,17 @@ class MainWindow(QMainWindow):
             f"Fixed: {RATE:,} S/s/ch, chunk {CHUNK:,} samples, "
             f"flush to disk every {FLUSH_INTERVAL_SEC}s"
         ))
+
+        trigger_row = QHBoxLayout()
+        self.capture_trigger_checkbox = QCheckBox("Capture TTL trigger on:")
+        self.capture_trigger_checkbox.setChecked(DEFAULT_CAPTURE_TRIGGER)
+        self.trigger_line_edit = QLineEdit(DEFAULT_TRIGGER_LINE)
+        self.trigger_line_edit.setFixedWidth(120)
+        trigger_row.addWidget(self.capture_trigger_checkbox)
+        trigger_row.addWidget(self.trigger_line_edit)
+        trigger_row.addStretch(1)
+        form.addRow(trigger_row)
+
         layout.addWidget(settings_box)
 
         # --- output folder + Start/Stop ---
@@ -120,9 +131,15 @@ class MainWindow(QMainWindow):
         self.start_btn.setEnabled(False)
         self.device_combo.setEnabled(False)
         self.refresh_btn.setEnabled(False)
+        self.capture_trigger_checkbox.setEnabled(False)
+        self.trigger_line_edit.setEnabled(False)
         self.trace_widget.set_locked(True)
 
-        self.worker.start(device, self.save_dir, enabled)
+        capture_trigger = self.capture_trigger_checkbox.isChecked()
+        trigger_line = self.trigger_line_edit.text().strip()
+
+        self.worker.start(device, self.save_dir, enabled,
+                           capture_trigger=capture_trigger, trigger_line=trigger_line)
         if self.worker.task is not None:
             self.stop_btn.setEnabled(True)
             self.status_label.setText(f"Status: acquiring ({RATE:,} S/s x {len(enabled)}ch)")
@@ -142,20 +159,26 @@ class MainWindow(QMainWindow):
             self._reset_controls()
             return
 
-        tmp_dir, n_samples, channels = result
+        tmp_dir, n_samples, channels, trigger_sample_index = result
         self.status_label.setText(
             f"Status: saving {n_samples:,} samples/channel in the background, please wait..."
         )
         # Controls stay disabled until the background save finishes, so a new
         # acquisition can't be started while the previous one is still being written.
-        self.finalize_worker = FinalizeWorker(tmp_dir, n_samples, self.save_dir, channels)
+        self.finalize_worker = FinalizeWorker(
+            tmp_dir, n_samples, self.save_dir, channels, trigger_sample_index
+        )
         self.finalize_worker.finished_ok.connect(self.on_finalize_finished)
         self.finalize_worker.error.connect(self.on_finalize_error)
         self.finalize_worker.start()
 
-    def on_finalize_finished(self, out_path: str, n_samples: int):
+    def on_finalize_finished(self, out_path: str, n_samples: int, trigger_sample_index):
+        if trigger_sample_index is not None:
+            trig_txt = f", trigger at sample {trigger_sample_index:,}"
+        else:
+            trig_txt = ""
         self.status_label.setText(
-            f"Status: saved {out_path} ({n_samples:,} samples/channel)"
+            f"Status: saved {out_path} ({n_samples:,} samples/channel{trig_txt})"
         )
         self._reset_controls()
 
@@ -169,6 +192,8 @@ class MainWindow(QMainWindow):
         self.start_btn.setEnabled(self.save_dir is not None)
         self.device_combo.setEnabled(True)
         self.refresh_btn.setEnabled(True)
+        self.capture_trigger_checkbox.setEnabled(True)
+        self.trigger_line_edit.setEnabled(True)
         self.trace_widget.set_locked(False)
 
     def on_chunk_ready(self, chunk):
