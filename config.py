@@ -29,3 +29,7 @@ DEFAULT_Y_RANGE = 10.0
 CHANNEL_ON_COLOR = "#1f77b4"
 CHANNEL_OFF_COLOR = "#b0b0b0"
 CHANNEL_OFF_FACECOLOR = "#e8e8e8"
+
+# External TTL trigger capture (e.g. from another DAQ's Trigger Out)
+DEFAULT_TRIGGER_LINE = "port0/line0"   # PFI0
+DEFAULT_CAPTURE_TRIGGER = True

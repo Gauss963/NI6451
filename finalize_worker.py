@@ -15,15 +15,17 @@ from config import RATE
 
 
 class FinalizeWorker(QThread):
-    finished_ok = Signal(str, int)   # (npz_path, n_samples_per_channel)
+    finished_ok = Signal(str, int, object)   # (npz_path, n_samples_per_channel, trigger_sample_index)
     error = Signal(str)
 
-    def __init__(self, tmp_dir: str, n_samples: int, save_dir: str, channels: list, parent=None):
+    def __init__(self, tmp_dir: str, n_samples: int, save_dir: str, channels: list,
+                 trigger_sample_index=None, parent=None):
         super().__init__(parent)
         self.tmp_dir = tmp_dir
         self.n_samples = n_samples
         self.save_dir = save_dir
         self.channels = list(channels)
+        self.trigger_sample_index = trigger_sample_index
 
     def _tmp_channel_path(self, position: int) -> str:
         return os.path.join(self.tmp_dir, f"ai{self.channels[position]}.raw")
@@ -51,6 +53,10 @@ class FinalizeWorker(QThread):
                 )
             save_dict["sample_rate"] = np.array(RATE)
             save_dict["channels"] = np.array(self.channels)
+            # -1 means trigger capture was off or no trigger edge was seen during the recording
+            save_dict["trigger_sample_index"] = np.array(
+                self.trigger_sample_index if self.trigger_sample_index is not None else -1
+            )
 
             fname = datetime.now().strftime("daq_%Y%m%d_%H%M%S.npz")
             out_path = os.path.join(self.save_dir, fname)
@@ -59,6 +65,6 @@ class FinalizeWorker(QThread):
             del save_dict  # release memmap references before deleting the files
             self._remove_tmp_dir()
 
-            self.finished_ok.emit(out_path, n)
+            self.finished_ok.emit(out_path, n, self.trigger_sample_index)
         except Exception as e:
             self.error.emit(str(e))
