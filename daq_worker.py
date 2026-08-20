@@ -133,6 +133,7 @@ class DAQWorker(QObject):
                     rate=RATE,
                     source=f"/{device}/ai/SampleClock",
                     sample_mode=AcquisitionType.CONTINUOUS,
+                    samps_per_chan=RATE * 5,  # match the AI task's buffer headroom
                 )
                 self.di_task.triggers.start_trigger.cfg_dig_edge_start_trig(
                     f"/{device}/ai/StartTrigger"
