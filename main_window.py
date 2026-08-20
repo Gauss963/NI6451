@@ -53,12 +53,14 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
 
-        # --- live sensor readout, pinned to the top-right corner ---
+        # --- live sensor readout: Trigger status pinned left, sensor values pinned right ---
         readout_layout = QHBoxLayout()
+        self.trigger_status_label = self._make_readout_label("Trigger: No", color="red")
+        readout_layout.addWidget(self.trigger_status_label)
         readout_layout.addStretch(1)
-        self.normal_stress_label = self._make_readout_label("Normal: -- MPa")
-        self.shear_stress_label = self._make_readout_label("Shear: -- MPa")
-        self.lvdt_label = self._make_readout_label("LVDT: -- mm")
+        self.normal_stress_label = self._make_readout_label("Normal: -- MPa", color="blue")
+        self.shear_stress_label = self._make_readout_label("Shear: -- MPa", color="blue")
+        self.lvdt_label = self._make_readout_label("LVDT: -- mm", color="blue")
         readout_layout.addWidget(self.normal_stress_label)
         readout_layout.addWidget(self.shear_stress_label)
         readout_layout.addWidget(self.lvdt_label)
@@ -169,9 +171,9 @@ class MainWindow(QMainWindow):
         self.refresh_devices()
 
     # ---------- small UI helpers ----------
-    def _make_readout_label(self, text: str) -> QLabel:
+    def _make_readout_label(self, text: str, color: str = "blue") -> QLabel:
         label = QLabel(text)
-        label.setStyleSheet("color: red; font-size: 22px; font-weight: bold;")
+        label.setStyleSheet(f"color: {color}; font-size: 22px; font-weight: bold;")
         return label
 
     def _on_fault_type_changed(self, fault_type: str):
@@ -253,6 +255,8 @@ class MainWindow(QMainWindow):
         trigger_line = self.trigger_line_edit.text().strip()
 
         self._latest_voltages = {}
+        self.trigger_status_label.setText("Trigger: No")
+        self.trigger_status_label.setStyleSheet("color: red; font-size: 22px; font-weight: bold;")
 
         self.worker.start(device, self.save_dir, enabled,
                            capture_trigger=capture_trigger, trigger_line=trigger_line)
@@ -327,6 +331,13 @@ class MainWindow(QMainWindow):
             self._latest_voltages[ch] = float(chunk[i, -1])
 
     def _update_readout(self):
+        if self.worker.trigger_sample_index is not None:
+            self.trigger_status_label.setText("Trigger: Yes")
+            self.trigger_status_label.setStyleSheet("color: blue; font-size: 22px; font-weight: bold;")
+        else:
+            self.trigger_status_label.setText("Trigger: No")
+            self.trigger_status_label.setStyleSheet("color: red; font-size: 22px; font-weight: bold;")
+
         v0 = self._latest_voltages.get(CH_NORMAL_STRESS)
         if v0 is None:
             self.normal_stress_label.setText("Normal: -- MPa")
