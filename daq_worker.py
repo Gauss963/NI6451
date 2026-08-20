@@ -85,6 +85,12 @@ class DAQWorker(QObject):
     # ---------- acquisition control ----------
     def start(self, device: str, save_dir: str, channels: list,
               capture_trigger: bool = False, trigger_line: str = "port0/line0"):
+        if self.task is not None:
+            self.error.emit(
+                "A previous acquisition task is still active. Stop it before starting a new one."
+            )
+            return
+
         self.channels = list(channels)
         n_active = len(self.channels)
 

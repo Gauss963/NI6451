@@ -44,6 +44,7 @@ class FinalizeWorker(QThread):
             pass  # leftover temp files are harmless; can be deleted manually
 
     def run(self):
+        out_path = None
         try:
             n = self.n_samples
             save_dict = {}
@@ -70,4 +71,13 @@ class FinalizeWorker(QThread):
 
             self.finished_ok.emit(out_path, n, self.trigger_sample_index)
         except Exception as e:
+            # Don't leave a broken/empty .npz behind if np.savez failed partway
+            # through. The raw temp files are intentionally NOT deleted here --
+            # they're the only copy of the captured data if this failed, so
+            # they're left in place for manual recovery.
+            if out_path is not None and os.path.exists(out_path):
+                try:
+                    os.remove(out_path)
+                except Exception:
+                    pass
             self.error.emit(str(e))

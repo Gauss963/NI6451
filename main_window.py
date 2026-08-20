@@ -351,11 +351,17 @@ class MainWindow(QMainWindow):
             self.lvdt_label.setText(f"LVDT: {lvdt_mm:.1f} mm")
 
     def on_error(self, msg: str):
-        self.trace_widget.stop()
-        self._readout_timer.stop()
-        self.stop_btn.setEnabled(False)
-        self._reset_controls()
-        self.status_label.setText("Status: error")
+        # Treat a hardware error the same as pressing Stop: properly close
+        # the task(s) and try to salvage whatever was already captured,
+        # instead of leaving an orphaned task running in the background
+        # with the Stop button disabled (which used to let a second Start
+        # open a second task on top of the still-running first one).
+        if self.worker.task is not None:
+            self.stop_acquisition()
+        else:
+            self.trace_widget.stop()
+            self._readout_timer.stop()
+            self._reset_controls()
 
         if self._error_dialog_open:
             return  # a dialog for a previous (likely related) error is already showing
