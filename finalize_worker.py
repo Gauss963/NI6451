@@ -19,13 +19,15 @@ class FinalizeWorker(QThread):
     error = Signal(str)
 
     def __init__(self, tmp_dir: str, n_samples: int, save_dir: str, channels: list,
-                 trigger_sample_index=None, parent=None):
+                 trigger_sample_index=None, sh: str = "0000", rn: int = 0, parent=None):
         super().__init__(parent)
         self.tmp_dir = tmp_dir
         self.n_samples = n_samples
         self.save_dir = save_dir
         self.channels = list(channels)
         self.trigger_sample_index = trigger_sample_index
+        self.sh = sh
+        self.rn = rn
 
     def _tmp_channel_path(self, position: int) -> str:
         return os.path.join(self.tmp_dir, f"ai{self.channels[position]}.raw")
@@ -58,7 +60,8 @@ class FinalizeWorker(QThread):
                 self.trigger_sample_index if self.trigger_sample_index is not None else -1
             )
 
-            fname = datetime.now().strftime("daq_%Y%m%d_%H%M%S.npz")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            fname = f"T{self.sh}-raw-run{self.rn}-{timestamp}.npz"
             out_path = os.path.join(self.save_dir, fname)
             np.savez(out_path, **save_dict)
 

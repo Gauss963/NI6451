@@ -9,7 +9,7 @@ Edit NPZ_PATH below, then just run:
 import numpy as np
 import matplotlib.pyplot as plt
 
-NPZ_PATH = "daq_xxxx.npz"   # <-- change to your actual .npz file
+NPZ_PATH = "./daq_20260818_164704.npz"   # <-- change to your actual .npz file
 
 d = np.load(NPZ_PATH)
 

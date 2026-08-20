@@ -1,13 +1,14 @@
 """
 MainWindow: assembles the UI (device selection, output folder, Start/Stop,
-live trace display with inline channel checkboxes) and wires user actions
-to DAQWorker / FinalizeWorker.
+live trace display with inline channel checkboxes, live sensor readout) and
+wires user actions to DAQWorker / FinalizeWorker.
 """
 
+from PySide6.QtCore import QTimer, QIntValidator
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QComboBox, QMessageBox,
-    QGroupBox, QFormLayout, QCheckBox, QLineEdit
+    QGroupBox, QFormLayout, QCheckBox, QLineEdit, QSpinBox
 )
 
 from config import RATE, CHUNK, FLUSH_INTERVAL_SEC, DEFAULT_TRIGGER_LINE, DEFAULT_CAPTURE_TRIGGER
@@ -15,17 +16,34 @@ from daq_worker import DAQWorker
 from finalize_worker import FinalizeWorker
 from devices import list_devices
 from plot_widget import LiveTraceWidget
+from unit_conversion import get_normal_stress, get_shear_stress, get_LVDT_displacement
+
+READOUT_INTERVAL_MS = 100  # 10 fps -- deliberately slower than the plot's own refresh rate
+
+# ai0 normal-stress setup: fault type -> available thicknesses, in (label, meters) pairs.
+# 2D is fixed at 50 cm inside get_normal_stress() itself, so the value passed for it doesn't matter.
+THICKNESS_1D_OPTIONS = [("5 cm", 0.05), ("10 cm", 0.10)]
+THICKNESS_2D_OPTIONS = [("50 cm (fixed, 9 pistons)", 0.50)]
+
+# fixed sensor-to-channel wiring for the live readout
+CH_NORMAL_STRESS = 0   # ai0
+CH_SHEAR_STRESS = 1    # ai1
+CH_LVDT = 2             # ai2
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("USB-6451 Continuous Acquisition Prototype")
-        self.resize(1100, 800)
+        self.resize(1100, 850)
 
         self.save_dir = None
         self._error_dialog_open = False
         self.finalize_worker = None
+        self._latest_voltages = {}   # {channel_number: most recent voltage sample}
+        self._current_sh = "0000"
+        self._current_rn = 0
+
         self.worker = DAQWorker()
         self.worker.chunk_ready.connect(self.on_chunk_ready)
         self.worker.error.connect(self.on_error)
@@ -33,6 +51,21 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
+
+        # --- live sensor readout, pinned to the top-right corner ---
+        readout_layout = QHBoxLayout()
+        readout_layout.addStretch(1)
+        self.normal_stress_label = self._make_readout_label("Normal: -- MPa")
+        self.shear_stress_label = self._make_readout_label("Shear: -- MPa")
+        self.lvdt_label = self._make_readout_label("LVDT: -- mm")
+        readout_layout.addWidget(self.normal_stress_label)
+        readout_layout.addWidget(self.shear_stress_label)
+        readout_layout.addWidget(self.lvdt_label)
+        layout.addLayout(readout_layout)
+
+        self._readout_timer = QTimer(self)
+        self._readout_timer.setInterval(READOUT_INTERVAL_MS)
+        self._readout_timer.timeout.connect(self._update_readout)
 
         # --- settings: device selection ---
         settings_box = QGroupBox("Acquisition Settings")
@@ -64,6 +97,49 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(settings_box)
 
+        # --- ai0 normal-stress fault setup ---
+        fault_box = QGroupBox("ai0: Normal Stress Setup")
+        fault_form = QFormLayout(fault_box)
+
+        fault_row = QHBoxLayout()
+        self.fault_type_combo = QComboBox()
+        self.fault_type_combo.addItems(["1D", "2D"])
+        self.fault_type_combo.currentTextChanged.connect(self._on_fault_type_changed)
+        self.fault_thickness_combo = QComboBox()
+        fault_row.addWidget(QLabel("Fault type:"))
+        fault_row.addWidget(self.fault_type_combo)
+        fault_row.addSpacing(16)
+        fault_row.addWidget(QLabel("Thickness:"))
+        fault_row.addWidget(self.fault_thickness_combo)
+        fault_row.addStretch(1)
+        fault_form.addRow(fault_row)
+        layout.addWidget(fault_box)
+        self._on_fault_type_changed(self.fault_type_combo.currentText())  # populate thickness options
+
+        # --- output naming ---
+        naming_box = QGroupBox("Output Naming")
+        naming_form = QFormLayout(naming_box)
+        naming_row = QHBoxLayout()
+        self.sh_edit = QLineEdit("0114")
+        self.sh_edit.setValidator(QIntValidator(0, 9999))
+        self.sh_edit.setFixedWidth(60)
+        self.rn_spin = QSpinBox()
+        self.rn_spin.setRange(0, 999999)
+        self.rn_spin.setValue(1)
+        naming_row.addWidget(QLabel("SH (4-digit, zero-padded):"))
+        naming_row.addWidget(self.sh_edit)
+        naming_row.addSpacing(16)
+        naming_row.addWidget(QLabel("RN (run number):"))
+        naming_row.addWidget(self.rn_spin)
+        naming_row.addStretch(1)
+        naming_form.addRow(naming_row)
+        self.filename_preview_label = QLabel()
+        naming_form.addRow(self.filename_preview_label)
+        self.sh_edit.textChanged.connect(self._update_filename_preview)
+        self.rn_spin.valueChanged.connect(self._update_filename_preview)
+        layout.addWidget(naming_box)
+        self._update_filename_preview()
+
         # --- output folder + Start/Stop ---
         ctrl_layout = QHBoxLayout()
         self.dir_label = QLabel("No output folder selected")
@@ -91,6 +167,33 @@ class MainWindow(QMainWindow):
 
         self.refresh_devices()
 
+    # ---------- small UI helpers ----------
+    def _make_readout_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setStyleSheet("color: red; font-size: 22px; font-weight: bold;")
+        return label
+
+    def _on_fault_type_changed(self, fault_type: str):
+        self.fault_thickness_combo.clear()
+        options = THICKNESS_1D_OPTIONS if fault_type == "1D" else THICKNESS_2D_OPTIONS
+        for label, _ in options:
+            self.fault_thickness_combo.addItem(label)
+        self.fault_thickness_combo.setEnabled(fault_type == "1D")
+
+    def _current_fault_thickness_m(self) -> float:
+        fault_type = self.fault_type_combo.currentText()
+        options = THICKNESS_1D_OPTIONS if fault_type == "1D" else THICKNESS_2D_OPTIONS
+        idx = max(0, self.fault_thickness_combo.currentIndex())
+        return options[idx][1]
+
+    def _update_filename_preview(self):
+        sh = self.sh_edit.text().strip().zfill(4)
+        rn = self.rn_spin.value()
+        self.filename_preview_label.setText(
+            f"Will save as: T{sh}-raw-run{rn}-<timestamp>.npz"
+        )
+
+    # ---------- device list ----------
     def refresh_devices(self):
         current = self.device_combo.currentText()
         try:
@@ -116,6 +219,7 @@ class MainWindow(QMainWindow):
             self.dir_label.setText(d)
             self.start_btn.setEnabled(True)
 
+    # ---------- acquisition control ----------
     def start_acquisition(self):
         device = self.device_combo.currentText().strip()
         if not device:
@@ -133,10 +237,21 @@ class MainWindow(QMainWindow):
         self.refresh_btn.setEnabled(False)
         self.capture_trigger_checkbox.setEnabled(False)
         self.trigger_line_edit.setEnabled(False)
+        self.fault_type_combo.setEnabled(False)
+        self.fault_thickness_combo.setEnabled(False)
+        self.sh_edit.setEnabled(False)
+        self.rn_spin.setEnabled(False)
         self.trace_widget.set_locked(True)
+
+        # capture the naming/fault settings now, so later edits don't retroactively
+        # affect the file this run is about to produce
+        self._current_sh = self.sh_edit.text().strip().zfill(4)
+        self._current_rn = self.rn_spin.value()
 
         capture_trigger = self.capture_trigger_checkbox.isChecked()
         trigger_line = self.trigger_line_edit.text().strip()
+
+        self._latest_voltages = {}
 
         self.worker.start(device, self.save_dir, enabled,
                            capture_trigger=capture_trigger, trigger_line=trigger_line)
@@ -144,6 +259,7 @@ class MainWindow(QMainWindow):
             self.stop_btn.setEnabled(True)
             self.status_label.setText(f"Status: acquiring ({RATE:,} S/s x {len(enabled)}ch)")
             self.trace_widget.start(enabled)
+            self._readout_timer.start()
         else:
             self.trace_widget.set_locked(False)
             self._reset_controls()
@@ -151,6 +267,7 @@ class MainWindow(QMainWindow):
     def stop_acquisition(self):
         self.stop_btn.setEnabled(False)
         self.trace_widget.stop()
+        self._readout_timer.stop()
 
         result = self.worker.stop_acquisition()
         if result is None:
@@ -166,7 +283,8 @@ class MainWindow(QMainWindow):
         # Controls stay disabled until the background save finishes, so a new
         # acquisition can't be started while the previous one is still being written.
         self.finalize_worker = FinalizeWorker(
-            tmp_dir, n_samples, self.save_dir, channels, trigger_sample_index
+            tmp_dir, n_samples, self.save_dir, channels, trigger_sample_index,
+            sh=self._current_sh, rn=self._current_rn,
         )
         self.finalize_worker.finished_ok.connect(self.on_finalize_finished)
         self.finalize_worker.error.connect(self.on_finalize_error)
@@ -194,13 +312,46 @@ class MainWindow(QMainWindow):
         self.refresh_btn.setEnabled(True)
         self.capture_trigger_checkbox.setEnabled(True)
         self.trigger_line_edit.setEnabled(True)
+        self.fault_type_combo.setEnabled(True)
+        self._on_fault_type_changed(self.fault_type_combo.currentText())
+        self.sh_edit.setEnabled(True)
+        self.rn_spin.setEnabled(True)
         self.trace_widget.set_locked(False)
 
+    # ---------- live data ----------
     def on_chunk_ready(self, chunk):
         self.trace_widget.push_chunk(chunk)
+        # cheap: just remember each active channel's most recent sample for the readout
+        for i, ch in enumerate(self.trace_widget.active_channels):
+            self._latest_voltages[ch] = float(chunk[i, -1])
+
+    def _update_readout(self):
+        v0 = self._latest_voltages.get(CH_NORMAL_STRESS)
+        if v0 is None:
+            self.normal_stress_label.setText("Normal: -- MPa")
+        else:
+            fault_type = self.fault_type_combo.currentText()
+            thickness_m = self._current_fault_thickness_m()
+            normal_mpa = get_normal_stress(v0, fault_type, thickness_m) / 1e6
+            self.normal_stress_label.setText(f"Normal: {normal_mpa:.1f} MPa")
+
+        v1 = self._latest_voltages.get(CH_SHEAR_STRESS)
+        if v1 is None:
+            self.shear_stress_label.setText("Shear: -- MPa")
+        else:
+            shear_mpa = get_shear_stress(v1) / 1e6
+            self.shear_stress_label.setText(f"Shear: {shear_mpa:.1f} MPa")
+
+        v2 = self._latest_voltages.get(CH_LVDT)
+        if v2 is None:
+            self.lvdt_label.setText("LVDT: -- mm")
+        else:
+            lvdt_mm = get_LVDT_displacement(v2) * 1000
+            self.lvdt_label.setText(f"LVDT: {lvdt_mm:.1f} mm")
 
     def on_error(self, msg: str):
         self.trace_widget.stop()
+        self._readout_timer.stop()
         self.stop_btn.setEnabled(False)
         self._reset_controls()
         self.status_label.setText("Status: error")
