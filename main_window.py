@@ -4,7 +4,8 @@ live trace display with inline channel checkboxes, live sensor readout) and
 wires user actions to DAQWorker / FinalizeWorker.
 """
 
-from PySide6.QtCore import QTimer, QIntValidator
+from PySide6.QtCore import QTimer
+from PySide6.QtGui import QIntValidator
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QComboBox, QMessageBox,
