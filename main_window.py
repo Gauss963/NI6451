@@ -123,7 +123,7 @@ class MainWindow(QMainWindow):
         naming_box = QGroupBox("Output Naming")
         naming_form = QFormLayout(naming_box)
         naming_row = QHBoxLayout()
-        self.sh_edit = QLineEdit("0114")
+        self.sh_edit = QLineEdit("0207")
         self.sh_edit.setValidator(QIntValidator(0, 9999))
         self.sh_edit.setFixedWidth(60)
         self.rn_spin = QSpinBox()

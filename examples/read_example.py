@@ -9,7 +9,7 @@ Edit NPZ_PATH below, then just run:
 import numpy as np
 import matplotlib.pyplot as plt
 
-NPZ_PATH = "./daq_20260818_164704.npz"   # <-- change to your actual .npz file
+NPZ_PATH = "./T0207-raw-run5-20260820_204711.npz"   # <-- change to your actual .npz file
 
 d = np.load(NPZ_PATH)
 
@@ -37,4 +37,5 @@ if trig_idx >= 0:
 
 axes[-1].set_xlabel("Time [s]")
 fig.tight_layout()
-plt.show()
+plt.savefig(NPZ_PATH.replace(".npz", ".png"), dpi=300)
+# plt.show()
