@@ -273,6 +273,8 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(False)
         self.trace_widget.stop()
         self._readout_timer.stop()
+        self.trigger_status_label.setText("Trigger: No")
+        self.trigger_status_label.setStyleSheet("color: red; font-size: 22px; font-weight: bold;")
 
         result = self.worker.stop_acquisition()
         if result is None:
