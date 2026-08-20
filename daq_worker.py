@@ -85,6 +85,12 @@ class DAQWorker(QObject):
     # ---------- acquisition control ----------
     def start(self, device: str, save_dir: str, channels: list,
               capture_trigger: bool = False, trigger_line: str = "port0/line0"):
+        if self.task is not None:
+            self.error.emit(
+                "A previous acquisition task is still active. Stop it before starting a new one."
+            )
+            return
+
         self.channels = list(channels)
         n_active = len(self.channels)
 
@@ -133,6 +139,7 @@ class DAQWorker(QObject):
                     rate=RATE,
                     source=f"/{device}/ai/SampleClock",
                     sample_mode=AcquisitionType.CONTINUOUS,
+                    samps_per_chan=RATE * 5,  # match the AI task's buffer headroom
                 )
                 self.di_task.triggers.start_trigger.cfg_dig_edge_start_trig(
                     f"/{device}/ai/StartTrigger"

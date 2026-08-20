@@ -1,4 +1,4 @@
-# USB-6451 Continuous Acquisition Prototype
+# USB-6451 Continuous Acquisition
 
 A PySide6 desktop app for continuous, multi-channel analog data acquisition with an NI USB-6451 (or compatible NI-DAQmx device). It streams up to 16 analog input channels at a fixed high sample rate, shows a live decimated preview per channel, and writes full-rate data to disk in the background.
 

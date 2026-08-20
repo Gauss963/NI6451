@@ -19,13 +19,15 @@ class FinalizeWorker(QThread):
     error = Signal(str)
 
     def __init__(self, tmp_dir: str, n_samples: int, save_dir: str, channels: list,
-                 trigger_sample_index=None, parent=None):
+                 trigger_sample_index=None, sh: str = "0000", rn: int = 0, parent=None):
         super().__init__(parent)
         self.tmp_dir = tmp_dir
         self.n_samples = n_samples
         self.save_dir = save_dir
         self.channels = list(channels)
         self.trigger_sample_index = trigger_sample_index
+        self.sh = sh
+        self.rn = rn
 
     def _tmp_channel_path(self, position: int) -> str:
         return os.path.join(self.tmp_dir, f"ai{self.channels[position]}.raw")
@@ -42,6 +44,7 @@ class FinalizeWorker(QThread):
             pass  # leftover temp files are harmless; can be deleted manually
 
     def run(self):
+        out_path = None
         try:
             n = self.n_samples
             save_dict = {}
@@ -58,7 +61,8 @@ class FinalizeWorker(QThread):
                 self.trigger_sample_index if self.trigger_sample_index is not None else -1
             )
 
-            fname = datetime.now().strftime("daq_%Y%m%d_%H%M%S.npz")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            fname = f"T{self.sh}-raw-run{self.rn}-{timestamp}.npz"
             out_path = os.path.join(self.save_dir, fname)
             np.savez(out_path, **save_dict)
 
@@ -67,4 +71,13 @@ class FinalizeWorker(QThread):
 
             self.finished_ok.emit(out_path, n, self.trigger_sample_index)
         except Exception as e:
+            # Don't leave a broken/empty .npz behind if np.savez failed partway
+            # through. The raw temp files are intentionally NOT deleted here --
+            # they're the only copy of the captured data if this failed, so
+            # they're left in place for manual recovery.
+            if out_path is not None and os.path.exists(out_path):
+                try:
+                    os.remove(out_path)
+                except Exception:
+                    pass
             self.error.emit(str(e))
