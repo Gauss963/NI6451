@@ -353,7 +353,7 @@ class MainWindow(QMainWindow):
         if v1 is None:
             self.shear_stress_label.setText("Shear: -- MPa")
         else:
-            shear_mpa = get_shear_stress(v1) / 1e6
+            shear_mpa = get_shear_stress(v1, fault_type, thickness_m) / 1e6
             self.shear_stress_label.setText(f"Shear: {shear_mpa:.1f} MPa")
 
         v2 = self._latest_voltages.get(CH_LVDT)
