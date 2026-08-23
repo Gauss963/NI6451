@@ -23,19 +23,23 @@ def get_normal_stress(voltage, fault_type, fault_thickness):
     
     return normal_stress # Pa
 
-def get_shear_stress(voltage):
+def get_shear_stress(voltage, fault_type, fault_thickness):
     
     mm = 1e-3
     m = 1
-    piston_area = 12.67e-3 * m * m
-    fault_thickness = 50 * mm
-    fault_width = 200 * mm
+    fault_length = 500 * mm
+        
+    if fault_type == '1D':
+        piston_area = 12.67e-3 * m * m * 1
+    if fault_type == '2D':
+        piston_area = 12.67e-3 * m * m * 3
+        fault_thickness = 500 * mm
     
     pressure = get_oil_pressure(voltage)
-    fault_area = fault_thickness * fault_width
-    normal_stress = pressure * piston_area / fault_area
+    fault_area = fault_thickness * fault_length
+    shear_stress = pressure * piston_area / fault_area
     
-    return normal_stress # Pa
+    return shear_stress # Pa
 
 def get_LVDT_displacement(voltage):
     
