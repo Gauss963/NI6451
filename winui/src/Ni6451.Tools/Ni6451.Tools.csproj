@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Ni6451.Tools</RootNamespace>
+    <AssemblyName>ni6451</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ni6451.Core\Ni6451.Core.csproj" />
+    <ProjectReference Include="..\Ni6451.Daq\Ni6451.Daq.csproj" />
+  </ItemGroup>
+
+</Project>

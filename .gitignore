@@ -6,3 +6,9 @@ __pycache__/
 
 # NPZ
 *.npz
+
+# .NET / WinUI (6451-WinUI branch; ignored on main too, where nothing matches)
+bin/
+obj/
+winui/artifacts/
+*.user

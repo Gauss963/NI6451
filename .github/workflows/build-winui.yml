@@ -1,0 +1,174 @@
+# Builds the x86-64 Windows executable for the WinUI 3 rewrite.
+#
+# WinUI 3 cannot be cross-compiled from macOS or Linux -- the Windows App SDK build chain
+# is Windows-only -- so this workflow is how a Windows binary gets produced without a
+# Windows machine to hand. Download it from the run's "Artifacts" section.
+name: Build WinUI (x64)
+
+on:
+  push:
+    branches: [main, 6451-WinUI]
+    paths:
+      - 'winui/**'
+      - '.github/workflows/build-winui.yml'
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main, 6451-WinUI]
+    paths:
+      - 'winui/**'
+      - '.github/workflows/build-winui.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # Every dotnet invocation runs from winui/, so winui/global.json applies. Without it the
+      # runner's default SDK (currently .NET 10) is selected, and Windows App SDK 1.6 then looks
+      # for its PRI build task under an SDK layout that does not exist there.
+      - name: Restore
+        working-directory: winui
+        run: dotnet restore Ni6451.sln
+
+      - name: Self-test (rolling buffer, unit conversions, .npz format)
+        working-directory: winui
+        run: dotnet run --project src/Ni6451.Tools/Ni6451.Tools.csproj -c Release -- selftest
+
+      - name: Publish x64
+        working-directory: winui
+        run: >
+          dotnet publish src/Ni6451.App/Ni6451.App.csproj
+          -c Release -r win-x64 -p:Platform=x64 --self-contained true
+          -v normal
+          -o ../artifacts/win-x64
+
+      # The CLI has no XAML, so it can be a single native executable.
+      - name: Publish the command line tool (Native AOT, single exe)
+        working-directory: winui
+        run: >
+          dotnet publish src/Ni6451.Tools/Ni6451.Tools.csproj
+          -c Release -r win-x64 -p:PublishAot=true
+          -o ../artifacts/win-x64-tools
+
+      - name: Upload the application
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ni6451-win-x64
+          path: artifacts/win-x64
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload the command line tool
+        uses: actions/upload-artifact@v4
+        with:
+          name: ni6451-cli-win-x64
+          path: artifacts/win-x64-tools
+          if-no-files-found: error
+          retention-days: 90
+
+  # Native AOT build of the application. WinUI 3 cannot be a single file (its XAML runtime,
+  # resources.pri, .winmd and native DLLs have to be loose files next to the exe), but AOT
+  # compiles the app and the whole .NET runtime into Ni6451.exe, which removes the ~170
+  # System.*.dll files. Kept as a separate job so that if the AOT toolchain trips on
+  # something, the standard build above is still produced.
+  build-aot:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        working-directory: winui
+        run: dotnet restore Ni6451.sln
+
+      - name: Publish x64 (Native AOT)
+        working-directory: winui
+        run: >
+          dotnet publish src/Ni6451.App/Ni6451.App.csproj
+          -c Release -r win-x64 -p:Platform=x64 -p:PublishAot=true
+          -v normal
+          -o ../artifacts/win-x64-aot
+
+      # The native PDB is ~47 MB, close to half the output, and only matters for symbolising a
+      # crash dump. Ship it as its own artifact rather than inside the folder users unpack.
+      - name: Separate the debug symbols
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/win-x64-aot-symbols | Out-Null
+          Get-ChildItem artifacts/win-x64-aot -Filter *.pdb | Move-Item -Destination artifacts/win-x64-aot-symbols
+          $files = Get-ChildItem artifacts/win-x64-aot -Recurse -File
+          "{0} files, {1:N0} MB" -f $files.Count, (($files | Measure-Object Length -Sum).Sum / 1MB)
+
+      - name: Upload the AOT application
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ni6451-win-x64-aot
+          path: artifacts/win-x64-aot
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload the AOT debug symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ni6451-win-x64-aot-symbols
+          path: artifacts/win-x64-aot-symbols
+          if-no-files-found: error
+          retention-days: 90
+
+  # Artifacts need a GitHub login and expire after 90 days. A tagged build additionally gets
+  # every flavour attached to a permanent, publicly downloadable GitHub Release.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, build-aot]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Zip each flavour
+        run: |
+          set -e
+          v="$GITHUB_REF_NAME"
+          (cd artifacts/Ni6451-win-x64-aot   && zip -qr "../Ni6451-$v-win-x64-aot.zip" .)
+          (cd artifacts/Ni6451-win-x64       && zip -qr "../Ni6451-$v-win-x64.zip" .)
+          (cd artifacts/ni6451-cli-win-x64   && zip -qr "../ni6451-cli-$v-win-x64.zip" .)
+          ls -lh artifacts/*.zip
+
+      - name: Create or update the Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          v="$GITHUB_REF_NAME"
+          cat > notes.md <<EOF
+          | File | What it is |
+          | --- | --- |
+          | \`Ni6451-$v-win-x64-aot.zip\` | **Recommended.** Native AOT build: the app and the .NET runtime compiled into \`Ni6451.exe\`. |
+          | \`Ni6451-$v-win-x64.zip\` | Standard self-contained .NET build. Same behaviour, more files. Fallback. |
+          | \`ni6451-cli-$v-win-x64.zip\` | The command line tool as a single native exe: \`devices\`, \`dump\`, \`recover\`, \`trigger-test\`, \`selftest\`. |
+
+          Unpack the whole folder and run \`Ni6451.exe\`. Requires Windows 10 1809+ x64 and the NI-DAQmx driver; nothing else needs to be installed.
+
+          If the window does not appear, send \`%LOCALAPPDATA%\\Ni6451\\startup.log\`.
+          EOF
+          if gh release view "$v" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$v" artifacts/*.zip --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$v" artifacts/*.zip --title "$v" --notes-file notes.md --repo "$GITHUB_REPOSITORY"
+          fi
