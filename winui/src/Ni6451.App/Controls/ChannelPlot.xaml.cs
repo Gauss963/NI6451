@@ -66,7 +66,7 @@ public sealed partial class ChannelPlot : UserControl, IDisposable
     public int Channel { get; private init; }
 
     /// <summary>Whether the channel is selected for acquisition.</summary>
-    public bool IsChannelEnabled => EnableCheckBox.IsChecked == true;
+    public bool IsChannelEnabled => EnableCheckBox?.IsChecked == true;
 
     /// <summary>Raised when the user checks or unchecks this channel.</summary>
     public event EventHandler<bool>? EnabledChanged;
@@ -79,7 +79,7 @@ public sealed partial class ChannelPlot : UserControl, IDisposable
     public void SetYRange(double yRange)
     {
         _yRange = yRange <= 0 ? AppConfig.DefaultYRange : yRange;
-        PlotCanvas.Invalidate();
+        PlotCanvas?.Invalidate();
     }
 
     /// <summary>
@@ -114,10 +114,12 @@ public sealed partial class ChannelPlot : UserControl, IDisposable
 
     private void OnCheckToggled(object sender, RoutedEventArgs e)
     {
-        bool enabled = IsChannelEnabled;
+        // Can fire while the XAML is still being parsed (IsChecked="True" is set in markup),
+        // at which point the canvas declared after the checkbox may not exist yet.
+        bool enabled = EnableCheckBox?.IsChecked == true;
         if (!enabled) _sampleCount = 0;
-        EnableCheckBox.Opacity = enabled ? 1.0 : 0.55;
-        PlotCanvas.Invalidate();
+        if (EnableCheckBox is not null) EnableCheckBox.Opacity = enabled ? 1.0 : 0.55;
+        PlotCanvas?.Invalidate();
         EnabledChanged?.Invoke(this, enabled);
     }
 

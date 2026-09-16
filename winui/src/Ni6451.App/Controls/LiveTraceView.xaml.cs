@@ -63,14 +63,6 @@ public sealed partial class LiveTraceView : UserControl, IDisposable
         StartupLog.Write("LiveTraceView: InitializeComponent");
         InitializeComponent();
 
-        WindowBox.Minimum = AppConfig.MinWindowSec;
-        WindowBox.Maximum = AppConfig.MaxWindowSec;
-        WindowBox.Value = AppConfig.DefaultWindowSec;
-
-        YRangeBox.Minimum = AppConfig.MinYRange;
-        YRangeBox.Maximum = AppConfig.MaxYRange;
-        YRangeBox.Value = AppConfig.DefaultYRange;
-
         int half = AppConfig.NChannels / 2;
         for (int row = 0; row < half; row++)
             ChannelGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -87,6 +79,17 @@ public sealed partial class LiveTraceView : UserControl, IDisposable
         }
 
         UpdateSelectionSummary();
+
+        // Only now that the plots exist: assigning Value raises ValueChanged synchronously,
+        // and the handlers push the new value into every plot. Doing this before the loop
+        // above dereferenced sixteen nulls -- the first thing the lab machine ever reported.
+        WindowBox.Minimum = AppConfig.MinWindowSec;
+        WindowBox.Maximum = AppConfig.MaxWindowSec;
+        WindowBox.Value = AppConfig.DefaultWindowSec;
+
+        YRangeBox.Minimum = AppConfig.MinYRange;
+        YRangeBox.Maximum = AppConfig.MaxYRange;
+        YRangeBox.Value = AppConfig.DefaultYRange;
 
         _timer.Interval = TimeSpan.FromMilliseconds(AppConfig.PlotRefreshMs);
         _timer.Tick += OnRedraw;
@@ -108,7 +111,7 @@ public sealed partial class LiveTraceView : UserControl, IDisposable
     /// <summary>Disable the checkboxes while an acquisition is running.</summary>
     public void SetLocked(bool locked)
     {
-        foreach (ChannelPlot p in _channelPlots) p.SetLocked(locked);
+        foreach (ChannelPlot? p in _channelPlots) p?.SetLocked(locked);
         SelectAllButton.IsEnabled = !locked;
         SelectNoneButton.IsEnabled = !locked;
     }
@@ -188,17 +191,17 @@ public sealed partial class LiveTraceView : UserControl, IDisposable
         }
 
         double range = Math.Clamp(args.NewValue, AppConfig.MinYRange, AppConfig.MaxYRange);
-        foreach (ChannelPlot p in _channelPlots) p.SetYRange(range);
+        foreach (ChannelPlot? p in _channelPlots) p?.SetYRange(range);
     }
 
     private void OnSelectAll(object sender, RoutedEventArgs e)
     {
-        foreach (ChannelPlot p in _channelPlots) p.SetChecked(true);
+        foreach (ChannelPlot? p in _channelPlots) p?.SetChecked(true);
     }
 
     private void OnSelectNone(object sender, RoutedEventArgs e)
     {
-        foreach (ChannelPlot p in _channelPlots) p.SetChecked(false);
+        foreach (ChannelPlot? p in _channelPlots) p?.SetChecked(false);
     }
 
     private void OnRedraw(object? sender, object e)
