@@ -40,7 +40,17 @@ public sealed partial class ChannelPlot : UserControl, IDisposable
 
     public ChannelPlot()
     {
-        InitializeComponent();
+        try
+        {
+            InitializeComponent();   // instantiates the Win2D CanvasControl
+        }
+        catch (Exception e)
+        {
+            StartupLog.Fatal(
+                "ChannelPlot could not be constructed. This is where the Win2D CanvasControl is created; "
+                + "if Microsoft.Graphics.Canvas.dll is missing or not registered, this is where it shows.", e);
+            throw;
+        }
 
         ActualThemeChanged += OnActualThemeChanged;
         Loaded += (_, _) => ApplyTheme();

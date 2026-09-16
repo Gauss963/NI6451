@@ -1,0 +1,51 @@
+2026-09-16 18:36:27.116  ==================================================================
+2026-09-16 18:36:27.125  Ni6451 starting  pid=17592
+2026-09-16 18:36:27.125  exe      : D:\Ni6451-win-x64-aot\Ni6451.exe
+2026-09-16 18:36:27.125  cwd      : D:\Ni6451-win-x64-aot
+2026-09-16 18:36:27.125  os       : Microsoft Windows NT 10.0.26200.0 (X64), .NET 8.0.31
+2026-09-16 18:36:27.125  process  : X64, 64-bit=True
+2026-09-16 18:36:27.125  Initialising COM wrappers
+2026-09-16 18:36:27.125  Starting the XAML application
+2026-09-16 18:36:27.492  Constructing App
+2026-09-16 18:36:27.493  App ctor: InitializeComponent
+2026-09-16 18:36:27.493  App ctor: done
+2026-09-16 18:36:27.748  OnLaunched: constructing MainWindow
+2026-09-16 18:36:28.065  MainWindow: InitializeComponent
+2026-09-16 18:36:28.238  FATAL: The main window could not be created.
+Microsoft.UI.Xaml.Markup.XamlParseException: 找不到與此錯誤碼關聯的文字。
+
+Cannot create instance of type 'Ni6451.App.Controls.LiveTraceView' [Line: 0 Position: 0]
+   at WinRT.ExceptionHelpers.<ThrowExceptionForHR>g__Throw|38_0(Int32) + 0x42
+   at ABI.Microsoft.UI.Xaml.IApplicationStaticsMethods.LoadComponent(IObjectReference, Object, Uri, ComponentResourceLocation) + 0x137
+   at Ni6451.App.MainWindow..ctor() + 0xfe
+   at Ni6451.App.App.OnLaunched(LaunchActivatedEventArgs) + 0x33
+2026-09-16 18:36:39.813  FATAL: Unhandled exception in the UI
+Microsoft.UI.Xaml.Markup.XamlParseException: 找不到與此錯誤碼關聯的文字。
+
+Cannot create instance of type 'Ni6451.App.Controls.LiveTraceView' [Line: 0 Position: 0]
+   at WinRT.ExceptionHelpers.<ThrowExceptionForHR>g__Throw|38_0(Int32) + 0x42
+   at ABI.Microsoft.UI.Xaml.IApplicationStaticsMethods.LoadComponent(IObjectReference, Object, Uri, ComponentResourceLocation) + 0x137
+   at Ni6451.App.MainWindow..ctor() + 0xfe
+   at Ni6451.App.App.OnLaunched(LaunchActivatedEventArgs) + 0x92
+   at ABI.Microsoft.UI.Xaml.IApplicationOverrides.Do_Abi_OnLaunched_0(IntPtr, IntPtr) + 0x62
+2026-09-16 18:37:45.097  ==================================================================
+2026-09-16 18:37:45.105  Ni6451 starting  pid=9056
+2026-09-16 18:37:45.106  exe      : D:\Ni6451-win-x64-aot\Ni6451.exe
+2026-09-16 18:37:45.106  cwd      : D:\Ni6451-win-x64-aot
+2026-09-16 18:37:45.106  os       : Microsoft Windows NT 10.0.26200.0 (X64), .NET 8.0.31
+2026-09-16 18:37:45.106  process  : X64, 64-bit=True
+2026-09-16 18:37:45.106  Initialising COM wrappers
+2026-09-16 18:37:45.106  Starting the XAML application
+2026-09-16 18:37:45.446  Constructing App
+2026-09-16 18:37:45.446  App ctor: InitializeComponent
+2026-09-16 18:37:45.447  App ctor: done
+2026-09-16 18:37:45.675  OnLaunched: constructing MainWindow
+2026-09-16 18:37:45.959  MainWindow: InitializeComponent
+2026-09-16 18:37:46.127  FATAL: The main window could not be created.
+Microsoft.UI.Xaml.Markup.XamlParseException: 找不到與此錯誤碼關聯的文字。
+
+Cannot create instance of type 'Ni6451.App.Controls.LiveTraceView' [Line: 0 Position: 0]
+   at WinRT.ExceptionHelpers.<ThrowExceptionForHR>g__Throw|38_0(Int32) + 0x42
+   at ABI.Microsoft.UI.Xaml.IApplicationStaticsMethods.LoadComponent(IObjectReference, Object, Uri, ComponentResourceLocation) + 0x137
+   at Ni6451.App.MainWindow..ctor() + 0xfe
+   at Ni6451.App.App.OnLaunched(LaunchActivatedEventArgs) + 0x33

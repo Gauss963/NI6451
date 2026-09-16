@@ -35,10 +35,18 @@ internal static class StartupLog
         }
     }
 
-    /// <summary>Record an exception and show it to the user, then let the caller decide whether to continue.</summary>
+    private static int _shown;
+
+    /// <summary>
+    /// Record an exception and show it to the user, then let the caller decide whether to
+    /// continue. One failure surfaces through several layers (control, window, App, the
+    /// XAML runtime's own handler), so only the first -- the innermost, most specific one --
+    /// gets a message box; the rest are logged only.
+    /// </summary>
     public static void Fatal(string context, Exception exception)
     {
         Write($"FATAL: {context}{Environment.NewLine}{exception}");
+        if (Interlocked.Exchange(ref _shown, 1) != 0) return;
 
         var text = new StringBuilder()
             .AppendLine(context)

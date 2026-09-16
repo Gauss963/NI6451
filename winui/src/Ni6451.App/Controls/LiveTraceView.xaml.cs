@@ -45,6 +45,22 @@ public sealed partial class LiveTraceView : UserControl, IDisposable
 
     public LiveTraceView()
     {
+        // The XAML parser wraps any exception thrown here in a bare "Cannot create instance
+        // of type LiveTraceView" and discards the cause, so record it before it is lost.
+        try
+        {
+            Construct();
+        }
+        catch (Exception e)
+        {
+            StartupLog.Fatal("LiveTraceView could not be constructed.", e);
+            throw;
+        }
+    }
+
+    private void Construct()
+    {
+        StartupLog.Write("LiveTraceView: InitializeComponent");
         InitializeComponent();
 
         WindowBox.Minimum = AppConfig.MinWindowSec;
@@ -59,6 +75,7 @@ public sealed partial class LiveTraceView : UserControl, IDisposable
         for (int row = 0; row < half; row++)
             ChannelGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
+        StartupLog.Write("LiveTraceView: creating channel plots (Win2D)");
         for (int ch = 0; ch < AppConfig.NChannels; ch++)
         {
             var plot = new ChannelPlot(ch);
@@ -73,6 +90,7 @@ public sealed partial class LiveTraceView : UserControl, IDisposable
 
         _timer.Interval = TimeSpan.FromMilliseconds(AppConfig.PlotRefreshMs);
         _timer.Tick += OnRedraw;
+        StartupLog.Write("LiveTraceView: ready");
     }
 
     /// <summary>Raised whenever the set of checked channels changes.</summary>
