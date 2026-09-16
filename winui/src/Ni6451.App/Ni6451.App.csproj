@@ -12,7 +12,7 @@
          Ni6451.exe with the Windows App SDK and the .NET runtime carried alongside it,
          so the lab machines need nothing installed except the NI-DAQmx driver. -->
     <UseWinUI>true</UseWinUI>
-    <EnableMsixTooling>true</EnableMsixTooling>
+    <!-- No EnableMsixTooling: that is for packaging projects, and this app ships unpackaged. -->
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <SelfContained>true</SelfContained>
@@ -25,11 +25,15 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.*" />
-    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.*" />
+    <!-- Pinned rather than floating: the XAML compiler resolves types out of these packages'
+         WinMDs, and a mismatched set makes it fail with no diagnostic at all. Microsoft.Windows.SDK.BuildTools
+         is deliberately not referenced here -- the App SDK pulls the version it was built against,
+         and overriding it is one way to produce exactly that failure. -->
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.250602001" />
     <!-- Win2D backs the 16 live traces. XAML shapes would mean rebuilding up to 32,000
-         Points every frame at 20 fps; Win2D draws straight to a Direct2D surface instead. -->
-    <PackageReference Include="Microsoft.Graphics.Win2D" Version="1.3.*" />
+         Points every frame at 20 fps; Win2D draws straight to a Direct2D surface instead.
+         1.4.0 is the release built for App SDK 1.6; 1.3.x targets 1.5 and its WinMD does not line up. -->
+    <PackageReference Include="Microsoft.Graphics.Win2D" Version="1.4.0" />
   </ItemGroup>
 
   <ItemGroup>
