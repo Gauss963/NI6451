@@ -1,0 +1,42 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.8.34322.80
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Ni6451.Core", "src\Ni6451.Core\Ni6451.Core.csproj", "{14F7D4C6-52EB-55A9-92D1-7861CB284972}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Ni6451.Daq", "src\Ni6451.Daq\Ni6451.Daq.csproj", "{B5F2CFB3-66C7-5C42-A813-09A0D1B3AB30}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Ni6451.Tools", "src\Ni6451.Tools\Ni6451.Tools.csproj", "{9A8705DA-63B3-58E2-B15C-CBE701F32603}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Ni6451.App", "src\Ni6451.App\Ni6451.App.csproj", "{5A68BE21-8FEA-55FD-9FB0-6180B10395FF}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{14F7D4C6-52EB-55A9-92D1-7861CB284972}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{14F7D4C6-52EB-55A9-92D1-7861CB284972}.Debug|x64.Build.0 = Debug|Any CPU
+		{14F7D4C6-52EB-55A9-92D1-7861CB284972}.Release|x64.ActiveCfg = Release|Any CPU
+		{14F7D4C6-52EB-55A9-92D1-7861CB284972}.Release|x64.Build.0 = Release|Any CPU
+		{B5F2CFB3-66C7-5C42-A813-09A0D1B3AB30}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{B5F2CFB3-66C7-5C42-A813-09A0D1B3AB30}.Debug|x64.Build.0 = Debug|Any CPU
+		{B5F2CFB3-66C7-5C42-A813-09A0D1B3AB30}.Release|x64.ActiveCfg = Release|Any CPU
+		{B5F2CFB3-66C7-5C42-A813-09A0D1B3AB30}.Release|x64.Build.0 = Release|Any CPU
+		{9A8705DA-63B3-58E2-B15C-CBE701F32603}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{9A8705DA-63B3-58E2-B15C-CBE701F32603}.Debug|x64.Build.0 = Debug|Any CPU
+		{9A8705DA-63B3-58E2-B15C-CBE701F32603}.Release|x64.ActiveCfg = Release|Any CPU
+		{9A8705DA-63B3-58E2-B15C-CBE701F32603}.Release|x64.Build.0 = Release|Any CPU
+		{5A68BE21-8FEA-55FD-9FB0-6180B10395FF}.Debug|x64.ActiveCfg = Debug|x64
+		{5A68BE21-8FEA-55FD-9FB0-6180B10395FF}.Debug|x64.Build.0 = Debug|x64
+		{5A68BE21-8FEA-55FD-9FB0-6180B10395FF}.Release|x64.ActiveCfg = Release|x64
+		{5A68BE21-8FEA-55FD-9FB0-6180B10395FF}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {E5A387F5-31D7-514A-8B46-842BE20131B1}
+	EndGlobalSection
+EndGlobal

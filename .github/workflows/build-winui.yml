@@ -1,0 +1,61 @@
+# Builds the x86-64 Windows executable for the WinUI 3 rewrite.
+#
+# WinUI 3 cannot be cross-compiled from macOS or Linux -- the Windows App SDK build chain
+# is Windows-only -- so this workflow is how a Windows binary gets produced without a
+# Windows machine to hand. Download it from the run's "Artifacts" section.
+name: Build WinUI (x64)
+
+on:
+  push:
+    branches: [6451-WinUI]
+    paths:
+      - 'winui/**'
+      - '.github/workflows/build-winui.yml'
+  pull_request:
+    branches: [6451-WinUI]
+    paths:
+      - 'winui/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore winui/Ni6451.sln
+
+      - name: Self-test (rolling buffer, unit conversions, .npz format)
+        run: dotnet run --project winui/src/Ni6451.Tools/Ni6451.Tools.csproj -c Release -- selftest
+
+      - name: Publish x64
+        run: >
+          dotnet publish winui/src/Ni6451.App/Ni6451.App.csproj
+          -c Release -r win-x64 -p:Platform=x64 --self-contained true
+          -o artifacts/win-x64
+
+      - name: Publish the command line tool
+        run: >
+          dotnet publish winui/src/Ni6451.Tools/Ni6451.Tools.csproj
+          -c Release -r win-x64 --self-contained true
+          -o artifacts/win-x64-tools
+
+      - name: Upload the application
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ni6451-win-x64
+          path: artifacts/win-x64
+          if-no-files-found: error
+
+      - name: Upload the command line tool
+        uses: actions/upload-artifact@v4
+        with:
+          name: ni6451-cli-win-x64
+          path: artifacts/win-x64-tools
+          if-no-files-found: error
