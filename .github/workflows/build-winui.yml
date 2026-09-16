@@ -121,9 +121,13 @@ jobs:
           -v normal
           -o ../artifacts/win-x64-aot
 
-      - name: Report output size
+      # The native PDB is ~47 MB, close to half the output, and only matters for symbolising a
+      # crash dump. Ship it as its own artifact rather than inside the folder users unpack.
+      - name: Separate the debug symbols
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force artifacts/win-x64-aot-symbols | Out-Null
+          Get-ChildItem artifacts/win-x64-aot -Filter *.pdb | Move-Item -Destination artifacts/win-x64-aot-symbols
           $files = Get-ChildItem artifacts/win-x64-aot -Recurse -File
           "{0} files, {1:N0} MB" -f $files.Count, (($files | Measure-Object Length -Sum).Sum / 1MB)
 
@@ -132,5 +136,13 @@ jobs:
         with:
           name: Ni6451-win-x64-aot
           path: artifacts/win-x64-aot
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload the AOT debug symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ni6451-win-x64-aot-symbols
+          path: artifacts/win-x64-aot-symbols
           if-no-files-found: error
           retention-days: 90
