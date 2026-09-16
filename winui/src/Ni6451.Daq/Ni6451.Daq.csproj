@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsAotCompatible>true</IsAotCompatible>
+    <!-- P/Invoke into nicaiu.dll only resolves on Windows, but keeping the TFM
+         platform-neutral means the assembly still compiles on a non-Windows machine,
+         which is what lets the acquisition logic be reviewed and built outside Windows. -->
+    <RootNamespace>Ni6451.Daq</RootNamespace>
+    <AssemblyName>Ni6451.Daq</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ni6451.Core\Ni6451.Core.csproj" />
+  </ItemGroup>
+
+</Project>

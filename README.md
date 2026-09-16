@@ -59,3 +59,11 @@ All tunable parameters (sample rate, chunk size, flush interval, plot refresh ra
 - AI channels use RSE (single-ended) mode with a ±10 V range.
 - Only the channels selected in the UI are added to the acquisition task; leaving unused channels unselected avoids exposing them to multiplexer ghosting from active neighboring channels.
 - The live plot is decimated for display purposes only — the data written to disk is always full-rate.
+
+## C# / WinUI 3 port
+
+A full rewrite of this application in C# and WinUI 3 lives under [`winui/`](winui/). It
+targets the same hardware and writes the same `.npz` files, so recordings from either version
+are interchangeable and `examples/read_example.py` reads both. Prebuilt Windows executables are
+on the [Releases](https://github.com/Gauss963/NI6451/releases) page; see
+[winui/README.md](winui/README.md) for how to build them.
