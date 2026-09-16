@@ -12,7 +12,10 @@
          Ni6451.exe with the Windows App SDK and the .NET runtime carried alongside it,
          so the lab machines need nothing installed except the NI-DAQmx driver. -->
     <UseWinUI>true</UseWinUI>
-    <!-- No EnableMsixTooling: that is for packaging projects, and this app ships unpackaged. -->
+    <!-- Required even though the app ships unpackaged: this is what wires up the MSIX/PRI build
+         tasks that MrtCore.PriGen.targets loads. Without it the build fails with MSB4062 looking
+         for Microsoft.Build.Packaging.Pri.Tasks.dll inside the .NET SDK, where it does not live. -->
+    <EnableMsixTooling>true</EnableMsixTooling>
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <SelfContained>true</SelfContained>
