@@ -34,13 +34,13 @@ public static class Program
             WinRT.ComWrappersSupport.InitializeComWrappers();
 
             StartupLog.Write("Starting the XAML application");
-            Application.Start(_ =>
+            Application.Start(callbackParams =>
             {
                 var context = new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread());
                 SynchronizationContext.SetSynchronizationContext(context);
 
                 StartupLog.Write("Constructing App");
-                _ = new App();
+                new App();
             });
 
             StartupLog.Write("Application.Start returned; exiting normally");
