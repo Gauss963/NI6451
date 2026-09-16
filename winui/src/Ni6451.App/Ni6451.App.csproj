@@ -27,7 +27,7 @@
   <ItemGroup>
     <!-- Pinned rather than floating: the XAML compiler resolves types out of these packages'
          WinMDs, and a mismatched set makes it fail with no diagnostic at all. Microsoft.Windows.SDK.BuildTools
-         is deliberately not referenced here -- the App SDK pulls the version it was built against,
+         is deliberately not referenced here — the App SDK pulls the version it was built against,
          and overriding it is one way to produce exactly that failure. -->
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.250602001" />
     <!-- Win2D backs the 16 live traces. XAML shapes would mean rebuilding up to 32,000

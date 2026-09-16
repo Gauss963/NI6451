@@ -54,7 +54,7 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <!-- ---------- left rail: everything you set before pressing Start ---------- -->
+            <!-- ————— left rail: everything you set before pressing Start ————— -->
             <Grid Grid.Column="0" RowSpacing="12">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*" />
@@ -188,7 +188,7 @@
                 </Grid>
             </Grid>
 
-            <!-- ---------- right pane: what the experiment is doing right now ---------- -->
+            <!-- ————— right pane: what the experiment is doing right now ————— -->
             <Grid Grid.Column="1" RowSpacing="12">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
