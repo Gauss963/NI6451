@@ -16,12 +16,6 @@ public sealed class SpoolManifest
 {
     public const string FileName = "manifest.json";
 
-    private static readonly JsonSerializerOptions Options = new()
-    {
-        WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.Never,
-    };
-
     public int Version { get; set; } = 1;
 
     public string Device { get; set; } = string.Empty;
@@ -58,7 +52,7 @@ public sealed class SpoolManifest
         string finalPath = PathIn(spoolDir);
         string tempPath = finalPath + ".tmp";
 
-        File.WriteAllText(tempPath, JsonSerializer.Serialize(this, Options));
+        File.WriteAllText(tempPath, JsonSerializer.Serialize(this, SpoolManifestJsonContext.Default.SpoolManifest));
         File.Move(tempPath, finalPath, overwrite: true);
     }
 
@@ -68,13 +62,24 @@ public sealed class SpoolManifest
         try
         {
             if (!File.Exists(path)) return null;
-            return JsonSerializer.Deserialize<SpoolManifest>(File.ReadAllText(path), Options);
+            return JsonSerializer.Deserialize(File.ReadAllText(path), SpoolManifestJsonContext.Default.SpoolManifest);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
         {
             return null;
         }
     }
+}
+
+/// <summary>
+/// Compile-time JSON (de)serialiser for <see cref="SpoolManifest"/>. Reflection-based
+/// System.Text.Json is trimmed away under Native AOT; the source generator emits the
+/// equivalent code at build time instead.
+/// </summary>
+[JsonSourceGenerationOptions(WriteIndented = true, DefaultIgnoreCondition = JsonIgnoreCondition.Never)]
+[JsonSerializable(typeof(SpoolManifest))]
+internal partial class SpoolManifestJsonContext : JsonSerializerContext
+{
 }
 
 /// <summary>An interrupted run found on disk, with everything needed to finish it.</summary>

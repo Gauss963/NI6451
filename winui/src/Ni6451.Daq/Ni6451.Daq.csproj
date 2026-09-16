@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
+    <IsAotCompatible>true</IsAotCompatible>
     <!-- P/Invoke into nicaiu.dll only resolves on Windows, but keeping the TFM
          platform-neutral means the assembly still compiles on a non-Windows machine,
          which is what lets the acquisition logic be reviewed and built outside Windows. -->

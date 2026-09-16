@@ -53,11 +53,12 @@ jobs:
           -v normal
           -o ../artifacts/win-x64
 
-      - name: Publish the command line tool
+      # The CLI has no XAML, so it can be a single native executable.
+      - name: Publish the command line tool (Native AOT, single exe)
         working-directory: winui
         run: >
           dotnet publish src/Ni6451.Tools/Ni6451.Tools.csproj
-          -c Release -r win-x64 --self-contained true
+          -c Release -r win-x64 -p:PublishAot=true
           -o ../artifacts/win-x64-tools
 
       - name: Upload the application
@@ -92,3 +93,44 @@ jobs:
           } else {
             gh release upload $env:GITHUB_REF_NAME $zip --clobber
           }
+
+  # Native AOT build of the application. WinUI 3 cannot be a single file (its XAML runtime,
+  # resources.pri, .winmd and native DLLs have to be loose files next to the exe), but AOT
+  # compiles the app and the whole .NET runtime into Ni6451.exe, which removes the ~170
+  # System.*.dll files. Kept as a separate job so that if the AOT toolchain trips on
+  # something, the standard build above is still produced.
+  build-aot:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        working-directory: winui
+        run: dotnet restore Ni6451.sln
+
+      - name: Publish x64 (Native AOT)
+        working-directory: winui
+        run: >
+          dotnet publish src/Ni6451.App/Ni6451.App.csproj
+          -c Release -r win-x64 -p:Platform=x64 -p:PublishAot=true
+          -v normal
+          -o ../artifacts/win-x64-aot
+
+      - name: Report output size
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem artifacts/win-x64-aot -Recurse -File
+          "{0} files, {1:N0} MB" -f $files.Count, (($files | Measure-Object Length -Sum).Sum / 1MB)
+
+      - name: Upload the AOT application
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ni6451-win-x64-aot
+          path: artifacts/win-x64-aot
+          if-no-files-found: error
+          retention-days: 90

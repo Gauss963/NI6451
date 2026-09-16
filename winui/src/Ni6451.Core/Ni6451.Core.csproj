@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
+    <IsAotCompatible>true</IsAotCompatible>
     <!-- Deliberately platform-neutral: the acquisition-independent logic (rolling buffer,
          unit conversion, .npy/.npz container) builds and runs on any OS, so it stays
          testable from a non-Windows machine. -->

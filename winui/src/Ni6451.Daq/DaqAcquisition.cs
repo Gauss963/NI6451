@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using Ni6451.Core;
 
@@ -63,10 +65,10 @@ public sealed class DaqAcquisition : IDisposable
     private nint _aiTask;
     private nint _diTask;
 
-    // The driver keeps a raw function pointer to this delegate, so the managed instance
-    // must stay reachable for as long as the task exists or the GC will collect it and
-    // the next callback will jump into freed memory.
-    private NiDaqmx.EveryNSamplesEventCallback? _callback;
+    // The driver calls the static EveryNSamplesThunk below and hands back this handle as its
+    // callbackData, which is how the thunk finds the instance. A normal (non-pinned) handle
+    // keeps the instance alive for as long as the task exists.
+    private GCHandle _selfHandle;
 
     private ChannelSpool? _spool;
     private int[] _channels = [];
@@ -223,9 +225,13 @@ public sealed class DaqAcquisition : IDisposable
                     _diTask, $"/{device}/ai/StartTrigger", NiDaqmx.Val_Rising));
             }
 
-            _callback = OnEveryNSamples;
-            NiDaqmx.Check(NiDaqmx.DAQmxRegisterEveryNSamplesEvent(
-                _aiTask, NiDaqmx.Val_Acquired_Into_Buffer, AppConfig.Chunk, 0, _callback, 0));
+            if (!_selfHandle.IsAllocated) _selfHandle = GCHandle.Alloc(this);
+            unsafe
+            {
+                NiDaqmx.Check(NiDaqmx.DAQmxRegisterEveryNSamplesEvent(
+                    _aiTask, NiDaqmx.Val_Acquired_Into_Buffer, AppConfig.Chunk, 0,
+                    &EveryNSamplesThunk, GCHandle.ToIntPtr(_selfHandle)));
+            }
 
             if (captureTrigger)
                 NiDaqmx.Check(NiDaqmx.DAQmxStartTask(_diTask));   // arms, waits for the AI start trigger
@@ -254,9 +260,7 @@ public sealed class DaqAcquisition : IDisposable
         StopAndClear(ref _aiTask);
         ShutdownPipelineThreads();
         StopAndClear(ref _diTask);
-
-        GC.KeepAlive(_callback);
-        _callback = null;
+        ReleaseSelfHandle();   // only after ClearTask: the driver may still call back until then
 
         Stats.Stop();
         AcquisitionSnapshot snapshot = Stats.Snapshot();
@@ -283,6 +287,27 @@ public sealed class DaqAcquisition : IDisposable
     }
 
     // ---------- DAQmx callback ----------
+
+    /// <summary>
+    /// The function the driver actually calls. No exception may escape an
+    /// <see cref="UnmanagedCallersOnlyAttribute"/> method -- it would tear the process down --
+    /// so this is a catch-all shell around the instance method.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
+    private static int EveryNSamplesThunk(nint taskHandle, int eventType, uint nSamples, nint callbackData)
+    {
+        try
+        {
+            if (callbackData != 0 && GCHandle.FromIntPtr(callbackData).Target is DaqAcquisition self)
+                return self.OnEveryNSamples(taskHandle, eventType, nSamples, callbackData);
+        }
+        catch (Exception)
+        {
+            // Swallowed deliberately: see the summary. The instance method reports its own errors.
+        }
+
+        return 0;
+    }
 
     private int OnEveryNSamples(nint taskHandle, int eventType, uint nSamples, nint callbackData)
     {
@@ -574,13 +599,17 @@ public sealed class DaqAcquisition : IDisposable
             ArrayPool<double>.Shared.Return(leftover.Buffer);
     }
 
+    private void ReleaseSelfHandle()
+    {
+        if (_selfHandle.IsAllocated) _selfHandle.Free();
+    }
+
     private void AbortAfterFailedStart()
     {
         StopAndClear(ref _aiTask);
         StopAndClear(ref _diTask);
         ShutdownPipelineThreads();
-        GC.KeepAlive(_callback);
-        _callback = null;
+        ReleaseSelfHandle();
 
         ChannelSpool? spool = _spool;
         _spool = null;
@@ -601,6 +630,7 @@ public sealed class DaqAcquisition : IDisposable
     public void Dispose()
     {
         if (IsRunning) StopAcquisition();
+        ReleaseSelfHandle();
         _spool?.Dispose();
     }
 

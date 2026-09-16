@@ -15,7 +15,7 @@ namespace Ni6451.Daq;
 /// All entry points are <c>__stdcall</c> and take ANSI strings, matching NIDAQmx.h.
 /// <c>TaskHandle</c> is <c>void*</c> in current driver versions, hence <see cref="nint"/>.
 /// </summary>
-internal static class NiDaqmx
+internal static unsafe class NiDaqmx
 {
     private const string Dll = "nicaiu.dll";
     private const CallingConvention Conv = CallingConvention.StdCall;
@@ -49,9 +49,9 @@ internal static class NiDaqmx
     public const uint Val_SynchronousEventCallbacks = 1u << 0;
 
     // ---------- callback ----------
-    [UnmanagedFunctionPointer(Conv)]
-    public delegate int EveryNSamplesEventCallback(
-        nint taskHandle, int everyNsamplesEventType, uint nSamples, nint callbackData);
+    // The callback is an unmanaged function pointer to an [UnmanagedCallersOnly] method rather
+    // than a marshalled delegate. It needs no runtime-generated thunk, so it works under Native
+    // AOT, and there is no managed delegate whose lifetime has to be guarded against the GC.
 
     // ---------- task lifecycle ----------
     [DllImport(Dll, CallingConvention = Conv, CharSet = CharSet.Ansi)]
@@ -93,12 +93,12 @@ internal static class NiDaqmx
 
     // ---------- events ----------
     [DllImport(Dll, CallingConvention = Conv)]
-    public static extern int DAQmxRegisterEveryNSamplesEvent(
+    public static extern unsafe int DAQmxRegisterEveryNSamplesEvent(
         nint taskHandle,
         int everyNsamplesEventType,
         uint nSamples,
         uint options,
-        EveryNSamplesEventCallback? callbackFunction,
+        delegate* unmanaged[Stdcall]<nint, int, uint, nint, int> callbackFunction,
         nint callbackData);
 
     // ---------- reads ----------
