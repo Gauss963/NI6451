@@ -30,6 +30,15 @@ Concretely, every recording contains the same arrays it always did:
 The file name keeps the `T{SH}-raw-run{RN}-{yyyyMMdd_HHmmss}.npz` pattern. Members are
 stored uncompressed, exactly as `numpy.savez` writes them.
 
+Reading is deliberately more permissive than writing: the integer arrays are also accepted
+as `<i4`, because NumPy 1.x on Windows makes `np.array(500000)` an `int32` — so archives the
+Python application already wrote on the lab machines store `sample_rate`, `channels` and
+`trigger_sample_index` in the narrower dtype.
+
+Verified both directions with NumPy 2.x: archives written by `FinalizeJob` load in NumPy
+bit-identically (including the `t = 0` at the trigger arithmetic `read_example.py` performs),
+and `ni6451 dump` reads `numpy.savez` archives in both the `int32` and `int64` flavours.
+
 `ni6451 selftest` asserts all of this — the `.npy` header text, the 64-byte data alignment,
 the stored (uncompressed) ZIP members, the 0-D shape of the scalars — and runs on any OS
 without hardware.
