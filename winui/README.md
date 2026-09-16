@@ -61,11 +61,21 @@ Install [.NET SDK 8.0](https://dotnet.microsoft.com/download/dotnet/8.0), then:
 pwsh winui/build/build-win-x64.ps1
 ```
 
-Output lands in `winui/artifacts/win-x64/`. Or by hand:
+Output lands in `winui/artifacts/win-x64/`. Or by hand — note the `cd`, which is not optional:
 
 ```powershell
-dotnet publish winui/src/Ni6451.App/Ni6451.App.csproj -c Release -r win-x64 -p:Platform=x64 --self-contained true -o out
+cd winui; dotnet publish src/Ni6451.App/Ni6451.App.csproj -c Release -r win-x64 -p:Platform=x64 --self-contained true -o ../artifacts/win-x64
 ```
+
+**`winui/global.json` pins the build to the .NET 8 SDK, and it only applies to `dotnet`
+commands run from inside `winui/`.** Windows App SDK 1.6 resolves its PRI build task against
+the selected SDK's directory layout, so building under a newer SDK fails with `MSB4062`. It
+lives in `winui/` rather than the repository root so that `main` is unaffected.
+
+The Windows App SDK and Win2D versions are pinned to a matched pair
+(`1.6.241114003` / `1.3.2` — the exact dependency Win2D declares). Floating either one pulls
+the two package generations into the same build, which shows up as a XAML compiler that exits
+non-zero with no diagnostic at all.
 
 ### Without a Windows machine — GitHub Actions
 
