@@ -7,9 +7,9 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <Grid Height="76" Margin="0,1,0,1">
+    <Grid MinHeight="64" Margin="0,2">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="62" />
+            <ColumnDefinition Width="58" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
@@ -17,15 +17,21 @@
             x:Name="EnableCheckBox"
             Grid.Column="0"
             IsChecked="True"
+            MinWidth="0"
             VerticalAlignment="Center"
             Checked="OnCheckToggled"
             Unchecked="OnCheckToggled" />
 
-        <win2d:CanvasControl
-            x:Name="PlotCanvas"
+        <Border
             Grid.Column="1"
-            Draw="OnDraw"
-            ClearColor="Transparent" />
+            CornerRadius="4"
+            BorderThickness="1"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+            <win2d:CanvasControl
+                x:Name="PlotCanvas"
+                Draw="OnDraw"
+                ClearColor="Transparent" />
+        </Border>
     </Grid>
 
 </UserControl>

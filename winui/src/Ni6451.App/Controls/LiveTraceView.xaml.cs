@@ -11,17 +11,19 @@ namespace Ni6451.App.Controls;
 /// provided separately -- the checkbox lives next to its own plot.
 ///
 /// Design notes:
-///   - The DAQ callback fires roughly every 10 ms (see <see cref="AppConfig.Rate"/> /
-///     <see cref="AppConfig.Chunk"/>), far faster than any GUI can usefully redraw.
-///     Incoming chunks are decimated down to <see cref="AppConfig.DisplayRateHz"/> and
-///     stored in a <see cref="RollingBuffer"/>; that decimated buffer is what actually gets
-///     plotted. This keeps redraws cheap regardless of the acquisition rate and lets the
-///     user pick an arbitrary time window without holding full-rate data in memory.
-///   - Decimation only affects what is shown on screen. The full-rate data spooled to disk
-///     by <c>DaqAcquisition</c> is untouched.
-///   - <see cref="PushChunk"/> runs on the DAQmx callback thread while <see cref="OnRedraw"/>
-///     runs on the UI thread, so every access to the rolling buffer is taken under
-///     <c>_bufferLock</c>. The Python version leaned on the GIL for this.
+///   - The DAQ callback fires roughly every 10 ms, far faster than any GUI can usefully
+///     redraw, so the data arriving at <see cref="PushChunk"/> has already been decimated to
+///     <see cref="AppConfig.DisplayRateHz"/> by the acquisition's monitor stage. It is stored
+///     in a <see cref="RollingBuffer"/>, and that buffer is what gets plotted. Redraw cost is
+///     therefore independent of the acquisition rate, and an arbitrary time window costs no
+///     extra memory.
+///   - Decimation only affects what is shown on screen. The full-rate data spooled to disk is
+///     untouched.
+///   - <see cref="PushChunk"/> runs on the acquisition's monitor thread while
+///     <see cref="OnRedraw"/> runs on the UI thread, so every access to the rolling buffer is
+///     taken under <c>_bufferLock</c>. Crucially the monitor thread is not the hardware
+///     callback thread: if the UI holds this lock while copying out a 30 s frame, the delay
+///     lands on the plot, never on the recording.
 /// </summary>
 public sealed partial class LiveTraceView : UserControl, IDisposable
 {
@@ -29,17 +31,14 @@ public sealed partial class LiveTraceView : UserControl, IDisposable
     private readonly DispatcherTimer _timer = new();
     private readonly object _bufferLock = new();
 
+    /// <summary>Scratch space for one channel's strided points, reused across channels and frames.</summary>
+    private readonly double[] _renderScratch = new double[AppConfig.MaxPlotPoints];
+
     private RollingBuffer? _buffer;
     private int[] _activeChannels = [];
 
-    /// <summary>Scratch space for decimating an incoming chunk; sized for the worst case.</summary>
-    private double[] _decimationScratch = [];
-
     /// <summary>Scratch space for the samples pulled out of the rolling buffer each frame.</summary>
     private double[] _frameScratch = [];
-
-    /// <summary>Scratch space for one channel's strided points, reused across channels and frames.</summary>
-    private readonly double[] _renderScratch = new double[AppConfig.MaxPlotPoints + 1];
 
     private int _windowSec = AppConfig.DefaultWindowSec;
     private bool _disposed;
@@ -58,17 +57,19 @@ public sealed partial class LiveTraceView : UserControl, IDisposable
 
         int half = AppConfig.NChannels / 2;
         for (int row = 0; row < half; row++)
-            ChannelGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            ChannelGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
         for (int ch = 0; ch < AppConfig.NChannels; ch++)
         {
             var plot = new ChannelPlot(ch);
-            plot.EnabledChanged += (_, _) => ChannelSelectionChanged?.Invoke(this, EventArgs.Empty);
+            plot.EnabledChanged += OnChannelToggled;
             Grid.SetRow(plot, ch % half);
             Grid.SetColumn(plot, ch < half ? 0 : 1);
             ChannelGrid.Children.Add(plot);
             _channelPlots[ch] = plot;
         }
+
+        UpdateSelectionSummary();
 
         _timer.Interval = TimeSpan.FromMilliseconds(AppConfig.PlotRefreshMs);
         _timer.Tick += OnRedraw;
@@ -101,7 +102,6 @@ public sealed partial class LiveTraceView : UserControl, IDisposable
         lock (_bufferLock)
         {
             _buffer = new RollingBuffer(_activeChannels.Length, AppConfig.BufferCapacity);
-            _decimationScratch = new double[_activeChannels.Length * DecimatedLength(AppConfig.Chunk)];
             _frameScratch = new double[_activeChannels.Length * AppConfig.BufferCapacity];
         }
 
@@ -120,43 +120,34 @@ public sealed partial class LiveTraceView : UserControl, IDisposable
     }
 
     /// <summary>
-    /// Called from the DAQ callback thread (high frequency). Decimates the incoming
-    /// full-rate chunk and appends it to the rolling display buffer. <paramref name="chunk"/>
-    /// has one row per active channel, in the same order as <see cref="ActiveChannels"/>,
-    /// with a row stride of <paramref name="nSamples"/>.
+    /// Append already-decimated, channel-major data (row stride = <paramref name="nSamples"/>)
+    /// in the same channel order as <see cref="ActiveChannels"/>. Called from the acquisition's
+    /// monitor thread.
     /// </summary>
     public void PushChunk(ReadOnlySpan<double> chunk, int nSamples)
     {
         lock (_bufferLock)
         {
-            if (_buffer is null) return;
+            if (_buffer is null || nSamples <= 0) return;
+            if (chunk.Length < _buffer.ChannelCount * nSamples) return;
 
-            int stride = AppConfig.DecimationStride;
-            int nChannels = _buffer.ChannelCount;
-            int outCount = DecimatedLength(nSamples);
-            if (outCount == 0) return;
-
-            int needed = nChannels * outCount;
-            if (_decimationScratch.Length < needed) _decimationScratch = new double[needed];
-
-            for (int c = 0; c < nChannels; c++)
-            {
-                int srcBase = c * nSamples;
-                int dstBase = c * outCount;
-                for (int i = 0, s = 0; i < outCount; i++, s += stride)
-                    _decimationScratch[dstBase + i] = chunk[srcBase + s];
-            }
-
-            _buffer.Push(_decimationScratch.AsSpan(0, needed), outCount);
+            _buffer.Push(chunk, nSamples);
         }
     }
 
     // ---------- internal ----------
 
-    private static int DecimatedLength(int nSamples)
+    private void OnChannelToggled(object? sender, bool enabled)
     {
-        int stride = AppConfig.DecimationStride;
-        return (nSamples + stride - 1) / stride;
+        UpdateSelectionSummary();
+        ChannelSelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void UpdateSelectionSummary()
+    {
+        if (SelectionSummary is null) return;
+        int n = _channelPlots.Count(p => p is not null && p.IsChannelEnabled);
+        SelectionSummary.Text = $"{n} of {AppConfig.NChannels} channels";
     }
 
     private void OnWindowChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
@@ -214,9 +205,9 @@ public sealed partial class LiveTraceView : UserControl, IDisposable
         // rounds up (the Python version truncated), so the cap is a genuine upper bound
         // instead of one that could still emit ~2x MaxPlotPoints for some window sizes.
         int stride = Math.Max(1, (n + AppConfig.MaxPlotPoints - 1) / AppConfig.MaxPlotPoints);
-        int rendered = (n + stride - 1) / stride;
+        int rendered = Math.Min(_renderScratch.Length, (n + stride - 1) / stride);
 
-        for (int c = 0; c < nChannels; c++)
+        for (int c = 0; c < nChannels && c < _activeChannels.Length; c++)
         {
             int channel = _activeChannels[c];
             int srcBase = c * n;

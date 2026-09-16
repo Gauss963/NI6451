@@ -21,6 +21,8 @@ internal static class SelfTestCommand
         TestNpyHeaderLayout();
         TestNpzRoundTrip();
         TestFinalizeJobProducesReadableArchive();
+        TestCrashRecovery();
+        TestAcquisitionStats();
         TestRollingBuffer();
         TestUnitConversion();
 
@@ -99,14 +101,14 @@ internal static class SelfTestCommand
             int[] channels = [0, 3, 7];
             const int samples = 1000;
 
-            var spool = new ChannelSpool(workDir, channels);
+            var spool = new ChannelSpool(workDir, channels, new SpoolManifest { Sh = "0207", Rn = 5 });
             var chunk = new double[channels.Length * samples];
             for (int c = 0; c < channels.Length; c++)
                 for (int i = 0; i < samples; i++)
                     chunk[c * samples + i] = channels[c] + i * 0.001;
 
             spool.Write(chunk, samples);
-            spool.FlushToDisk();
+            spool.Flush();
             spool.CloseFiles();
 
             string outPath = FinalizeJob.Run(new FinalizeRequest(
@@ -133,6 +135,95 @@ internal static class SelfTestCommand
         {
             if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true);
         }
+    }
+
+    // ---------- crash recovery ----------
+
+    private static void TestCrashRecovery()
+    {
+        string workDir = Path.Combine(Path.GetTempPath(), $"ni6451_selftest_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            int[] channels = [0, 1];
+            const int samples = 800;
+
+            // Simulate a run that was killed: data spooled, manifest present, never finalized.
+            var spool = new ChannelSpool(workDir, channels, new SpoolManifest { Sh = "0311", Rn = 9 });
+            spool.TriggerIndexSource = () => 42L;
+
+            var chunk = new double[channels.Length * samples];
+            for (int c = 0; c < channels.Length; c++)
+                for (int i = 0; i < samples; i++)
+                    chunk[c * samples + i] = c * 1000 + i;
+
+            spool.Write(chunk, samples);
+            spool.SaveManifest();
+            spool.CloseFiles();   // no FinalizeJob.Run: this is the crash
+
+            IReadOnlyList<OrphanedSpool> orphans = SpoolRecovery.FindOrphans(workDir);
+            Check("recovery: the interrupted run is found", orphans.Count == 1);
+            if (orphans.Count != 1) return;
+
+            OrphanedSpool orphan = orphans[0];
+            Check("recovery: sample count is re-derived from the file lengths",
+                orphan.RecoverableSamplesPerChannel == samples);
+            Check("recovery: run numbering survives", orphan.Manifest.Sh == "0311" && orphan.Manifest.Rn == 9);
+            Check("recovery: trigger index survives", orphan.Manifest.TriggerSampleIndex == 42L);
+
+            string outPath = SpoolRecovery.Recover(orphan, workDir);
+            Check("recovery: reuses the original run numbering in the file name",
+                Path.GetFileName(outPath).StartsWith("T0311-raw-run9-", StringComparison.Ordinal));
+
+            using (var r = new NpzReader(outPath))
+            {
+                double[] ai1 = r.ReadFloat64Array("ai1");
+                Check("recovery: the rescued samples are intact",
+                    ai1.Length == samples && Math.Abs(ai1[799] - 1799) < 1e-12);
+                Check("recovery: the trigger index is carried into the archive",
+                    r.ReadInt64Scalar("trigger_sample_index") == 42L);
+            }
+
+            Check("recovery: a recovered run is not offered again",
+                SpoolRecovery.FindOrphans(workDir).Count == 0);
+        }
+        finally
+        {
+            if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    // ---------- stats ----------
+
+    private static void TestAcquisitionStats()
+    {
+        var stats = new AcquisitionStats();
+        stats.Reset(channelCount: 4, queueCapacity: 10);
+
+        stats.OnChunkQueued(5000);
+        stats.OnChunkQueued(5000);
+        stats.OnChunkQueued(5000);
+        Check("stats: queue depth tracks outstanding chunks", stats.Snapshot().QueueDepth == 3);
+
+        stats.OnChunkWritten(160_000);
+        Check("stats: a written chunk leaves the queue", stats.Snapshot().QueueDepth == 2);
+
+        AcquisitionSnapshot snap = stats.Snapshot();
+        Check("stats: peak depth is retained after draining", snap.PeakQueueDepth == 3);
+        Check("stats: samples accumulate", snap.SamplesPerChannel == 15_000);
+        Check("stats: no loss reported on a healthy run", !snap.HasDataLoss);
+
+        stats.OnOverrun();
+        Check("stats: an overrun is reported as data loss", stats.Snapshot().HasDataLoss);
+
+        // Concurrent updates must not lose counts -- this is the hot path from four threads.
+        var parallel = new AcquisitionStats();
+        parallel.Reset(16, 200);
+        Parallel.For(0, 1000, _ => parallel.OnChunkQueued(10));
+        Parallel.For(0, 1000, _ => parallel.OnChunkWritten(80));
+        AcquisitionSnapshot p = parallel.Snapshot();
+        Check("stats: interlocked updates survive concurrency",
+            p.ChunksAcquired == 1000 && p.SamplesPerChannel == 10_000 && p.QueueDepth == 0 && p.BytesSpooled == 80_000);
     }
 
     // ---------- rolling buffer ----------

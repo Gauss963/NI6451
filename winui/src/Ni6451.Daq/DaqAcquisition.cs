@@ -1,5 +1,5 @@
 using System.Buffers;
-using System.Collections.Concurrent;
+using System.Threading.Channels;
 using Ni6451.Core;
 
 namespace Ni6451.Daq;
@@ -9,7 +9,8 @@ public sealed record AcquisitionResult(
     string TempDir,
     long SamplesPerChannel,
     IReadOnlyList<int> Channels,
-    long? TriggerSampleIndex);
+    long? TriggerSampleIndex,
+    AcquisitionSnapshot Stats);
 
 /// <summary>
 /// Creates and controls the DAQmx task(s), using only the channels the user selected in
@@ -17,12 +18,22 @@ public sealed record AcquisitionResult(
 /// record which AI sample index lines up with the first rising edge of an external TTL
 /// trigger (e.g. another DAQ's Trigger Out).
 ///
-/// This is the C# port of the Python <c>daq_worker.py</c>, with one deliberate change:
-/// instead of accumulating ten seconds of data in RAM and writing it in one burst (which
-/// peaked around 640 MB for 16 channels), every chunk is handed to a background writer
-/// thread through a bounded queue and spooled to disk immediately. The queue provides the
-/// same decoupling the old design got from buffering, without the memory spike, and keeps
-/// the driver's callback thread from ever blocking on disk I/O.
+/// This is the C# port of the Python <c>daq_worker.py</c>, restructured into a three-stage
+/// pipeline whose stages genuinely run at the same time -- which is the part a Python
+/// implementation could not have, because the GIL serialises them no matter how many
+/// threads are involved:
+///
+///   1. <b>The DAQmx callback thread</b> does the minimum that must happen there: read the
+///      AI buffer, read the DI buffer, take one strided copy for the monitor, and hand both
+///      off. It never touches the UI's rolling buffer and never waits on disk.
+///   2. <b>The spool writer thread</b> drains a bounded queue and writes the full-rate data
+///      to the per-channel files, fanning the per-channel writes out across the thread pool.
+///      The queue is the backpressure: if the disk cannot keep up, the queue fills and the
+///      callback waits, which is visible in <see cref="Stats"/> long before anything is lost.
+///   3. <b>The monitor thread</b> drains a separate, small, lossy queue of decimated data and
+///      raises <see cref="MonitorChunkReady"/>. Because this queue drops its oldest entry when
+///      full, a stalled or slow UI can never apply backpressure to the acquisition -- the
+///      live plot degrades instead, and the recording is untouched.
 ///
 /// Notes:
 ///   - AI channels use RSE (single-ended) mode with a +/-10 V range.
@@ -38,8 +49,14 @@ public sealed record AcquisitionResult(
 /// </summary>
 public sealed class DaqAcquisition : IDisposable
 {
-    /// <summary>Roughly two seconds of chunks; provides backpressure if the disk falls behind.</summary>
-    private const int WriteQueueCapacity = 200;
+    /// <summary>DAQmx: "the application is not able to keep up with the hardware acquisition".</summary>
+    private const int ErrorSamplesNoLongerAvailable = -200279;
+
+    /// <summary>DAQmx: onboard device memory overflowed before the samples could be transferred.</summary>
+    private const int ErrorOnboardMemoryOverflow = -200361;
+
+    /// <summary>Frames of decimated monitor data buffered for the UI before the oldest is dropped.</summary>
+    private const int MonitorQueueCapacity = 64;
 
     private readonly object _latestLock = new();
 
@@ -54,8 +71,10 @@ public sealed class DaqAcquisition : IDisposable
     private ChannelSpool? _spool;
     private int[] _channels = [];
 
-    private BlockingCollection<PendingChunk>? _writeQueue;
+    private Channel<PendingChunk>? _spoolQueue;
+    private Channel<PendingChunk>? _monitorQueue;
     private Thread? _writerThread;
+    private Thread? _monitorThread;
     private volatile string? _writerError;
 
     private byte[] _diBuffer = [];
@@ -68,14 +87,20 @@ public sealed class DaqAcquisition : IDisposable
     private long _triggerSampleIndex = -1;
 
     /// <summary>
-    /// Raised on the DAQmx callback thread for every acquired chunk, with a channel-major
-    /// buffer (row stride = the sample count) that is only valid for the duration of the
-    /// call. Handlers must copy anything they need and must not block.
+    /// Raised on the dedicated monitor thread with decimated, channel-major data (row stride =
+    /// the sample count). The buffer is only valid for the duration of the call; handlers must
+    /// copy what they need. Handlers may block without affecting the recording.
     /// </summary>
-    public event Action<ReadOnlyMemory<double>, int>? ChunkReady;
+    public event Action<ReadOnlyMemory<double>, int>? MonitorChunkReady;
 
     /// <summary>Raised when the driver or the spool writer fails. May fire on a background thread.</summary>
     public event Action<string>? Error;
+
+    /// <summary>Raised when samples were provably lost, with a description of what happened.</summary>
+    public event Action<string>? DataLoss;
+
+    /// <summary>Live counters for the current run.</summary>
+    public AcquisitionStats Stats { get; } = new();
 
     public bool IsRunning => _aiTask != 0;
 
@@ -84,6 +109,9 @@ public sealed class DaqAcquisition : IDisposable
 
     /// <summary>Whether trigger capture was requested for the current run.</summary>
     public bool CaptureTrigger { get; private set; }
+
+    /// <summary>Keep every Nth full-rate sample for the monitor stream. Display concern only.</summary>
+    public int MonitorDecimationStride { get; set; } = AppConfig.DecimationStride;
 
     /// <summary>
     /// AI sample index of the first trigger rising edge, or null if trigger capture is off
@@ -126,7 +154,8 @@ public sealed class DaqAcquisition : IDisposable
         string saveDir,
         IReadOnlyList<int> channels,
         bool captureTrigger = false,
-        string triggerLine = AppConfig.DefaultTriggerLine)
+        string triggerLine = AppConfig.DefaultTriggerLine,
+        SpoolManifest? manifest = null)
     {
         if (_aiTask != 0)
         {
@@ -148,22 +177,23 @@ public sealed class DaqAcquisition : IDisposable
         _sampleCounter = 0;
         _writerError = null;
         _diBuffer = new byte[AppConfig.Chunk];
+        Stats.Reset(nActive, AppConfig.WriteQueueCapacity);
 
         lock (_latestLock)
             _latestVoltages = new double[nActive];
 
         try
         {
-            _spool = new ChannelSpool(saveDir, _channels);
+            manifest ??= new SpoolManifest();
+            manifest.Device = device;
+            manifest.CaptureTrigger = captureTrigger;
 
-            _writeQueue = new BlockingCollection<PendingChunk>(WriteQueueCapacity);
-            _writerThread = new Thread(WriterLoop)
+            _spool = new ChannelSpool(saveDir, _channels, manifest)
             {
-                IsBackground = true,
-                Name = "ni6451-spool-writer",
-                Priority = ThreadPriority.AboveNormal,
+                TriggerIndexSource = () => TriggerSampleIndex,
             };
-            _writerThread.Start();
+
+            StartPipelineThreads();
 
             NiDaqmx.Check(NiDaqmx.DAQmxCreateTask(string.Empty, out _aiTask));
             foreach (int ch in _channels)
@@ -220,19 +250,22 @@ public sealed class DaqAcquisition : IDisposable
         // Order matters: stop the AI task first so no further callbacks are queued, then
         // clear it (which waits for any in-flight callback to return -- the writer thread
         // is still draining at this point, so a callback blocked on a full queue can
-        // always make progress), and only then shut the writer down.
+        // always make progress), and only then shut the pipeline down.
         StopAndClear(ref _aiTask);
-        ShutdownWriter();
+        ShutdownPipelineThreads();
         StopAndClear(ref _diTask);
 
         GC.KeepAlive(_callback);
         _callback = null;
 
+        Stats.Stop();
+        AcquisitionSnapshot snapshot = Stats.Snapshot();
+
         ChannelSpool? spool = _spool;
         _spool = null;
         if (spool is null) return null;
 
-        spool.FlushToDisk();
+        spool.Flush(durable: true);
         spool.CloseFiles();
 
         string? writerError = _writerError;
@@ -246,7 +279,7 @@ public sealed class DaqAcquisition : IDisposable
         }
 
         return new AcquisitionResult(
-            spool.TempDir, spool.TotalSamplesWritten, _channels.ToArray(), TriggerSampleIndex);
+            spool.TempDir, spool.TotalSamplesWritten, _channels.ToArray(), TriggerSampleIndex, snapshot);
     }
 
     // ---------- DAQmx callback ----------
@@ -275,12 +308,15 @@ public sealed class DaqAcquisition : IDisposable
                     _latestVoltages[c] = buffer[c * n + n - 1];
             }
 
-            ChunkReady?.Invoke(new ReadOnlyMemory<double>(buffer, 0, nActive * n), n);
+            PostToMonitor(buffer, n, nActive);
 
-            BlockingCollection<PendingChunk>? queue = _writeQueue;
+            Channel<PendingChunk>? queue = _spoolQueue;
             if (queue is not null)
             {
-                queue.Add(new PendingChunk(buffer, n, nActive));
+                // Blocks only if the writer is more than WriteQueueCapacity chunks behind,
+                // which is the intended backpressure and is visible in Stats.QueuePressure.
+                queue.Writer.WriteAsync(new PendingChunk(buffer, n, nActive)).AsTask().GetAwaiter().GetResult();
+                Stats.OnChunkQueued(n);
                 handedOff = true;
             }
 
@@ -289,11 +325,22 @@ public sealed class DaqAcquisition : IDisposable
 
             _sampleCounter += n;
         }
-        catch (Exception e) when (e is DaqmxException or InvalidOperationException or ObjectDisposedException)
+        catch (DaqmxException e)
         {
-            // InvalidOperationException/ObjectDisposedException come from Add() racing a
-            // shutdown; those are expected during teardown and not worth surfacing.
-            if (e is DaqmxException) Error?.Invoke(e.Message);
+            if (e.Status is ErrorSamplesNoLongerAvailable or ErrorOnboardMemoryOverflow)
+            {
+                Stats.OnOverrun();
+                DataLoss?.Invoke(
+                    "The acquisition outran the buffer and samples were lost. The recording up to this "
+                    + "point is intact and will still be saved. Reduce the channel count, or move the "
+                    + "output folder to a faster drive.");
+            }
+
+            Error?.Invoke(e.Message);
+        }
+        catch (Exception e) when (e is InvalidOperationException or ObjectDisposedException or ChannelClosedException)
+        {
+            // Racing a shutdown; expected during teardown and not worth surfacing.
         }
         finally
         {
@@ -301,6 +348,35 @@ public sealed class DaqAcquisition : IDisposable
         }
 
         return 0;   // DAQmx requires the callback to return a status
+    }
+
+    /// <summary>
+    /// Take a strided copy for the live plot and hand it to the monitor thread. Decimating
+    /// here rather than in the UI keeps the callback thread away from the rolling buffer's
+    /// lock, which the UI holds while it copies out a frame -- up to several megabytes at a
+    /// 30 s window.
+    /// </summary>
+    private void PostToMonitor(double[] source, int nSamples, int nActive)
+    {
+        Channel<PendingChunk>? monitor = _monitorQueue;
+        if (monitor is null) return;
+
+        int stride = Math.Max(1, MonitorDecimationStride);
+        int outCount = (nSamples + stride - 1) / stride;
+        if (outCount <= 0) return;
+
+        double[] decimated = ArrayPool<double>.Shared.Rent(nActive * outCount);
+        for (int c = 0; c < nActive; c++)
+        {
+            int srcBase = c * nSamples;
+            int dstBase = c * outCount;
+            for (int i = 0, s = 0; i < outCount; i++, s += stride)
+                decimated[dstBase + i] = source[srcBase + s];
+        }
+
+        // Lossy on purpose: a slow UI drops frames instead of stalling the acquisition.
+        if (!monitor.Writer.TryWrite(new PendingChunk(decimated, outCount, nActive)))
+            ArrayPool<double>.Shared.Return(decimated);
     }
 
     /// <summary>
@@ -350,22 +426,68 @@ public sealed class DaqAcquisition : IDisposable
         _triggerLastValue = _diBuffer[read - 1] != 0;
     }
 
-    // ---------- spool writer ----------
+    // ---------- pipeline threads ----------
+
+    private void StartPipelineThreads()
+    {
+        _spoolQueue = Channel.CreateBounded<PendingChunk>(new BoundedChannelOptions(AppConfig.WriteQueueCapacity)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true,
+            SingleWriter = true,
+        });
+
+        _monitorQueue = Channel.CreateBounded<PendingChunk>(new BoundedChannelOptions(MonitorQueueCapacity)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+            SingleReader = true,
+            SingleWriter = true,
+        });
+
+        _writerThread = new Thread(WriterLoop)
+        {
+            IsBackground = true,
+            Name = "ni6451-spool-writer",
+            Priority = ThreadPriority.AboveNormal,
+        };
+        _writerThread.Start();
+
+        _monitorThread = new Thread(MonitorLoop)
+        {
+            IsBackground = true,
+            Name = "ni6451-monitor",
+            Priority = ThreadPriority.BelowNormal,
+        };
+        _monitorThread.Start();
+    }
 
     private void WriterLoop()
     {
-        BlockingCollection<PendingChunk>? queue = _writeQueue;
+        Channel<PendingChunk>? queue = _spoolQueue;
         ChannelSpool? spool = _spool;
         if (queue is null || spool is null) return;
 
         try
         {
-            foreach (PendingChunk chunk in queue.GetConsumingEnumerable())
+            while (true)
             {
+                if (!queue.Reader.TryRead(out PendingChunk chunk))
+                {
+                    if (!queue.Reader.WaitToReadAsync().AsTask().GetAwaiter().GetResult()) break;
+                    continue;
+                }
+
                 try
                 {
                     if (_writerError is null)
-                        spool.Write(chunk.Buffer.AsSpan(0, chunk.ChannelCount * chunk.SampleCount), chunk.SampleCount);
+                    {
+                        spool.Write(chunk.Buffer, chunk.SampleCount);
+                        Stats.OnChunkWritten((long)chunk.SampleCount * chunk.ChannelCount * sizeof(double));
+                    }
+                    else
+                    {
+                        Stats.OnChunkDropped();
+                    }
                 }
                 finally
                 {
@@ -378,33 +500,85 @@ public sealed class DaqAcquisition : IDisposable
             // Record and keep draining the queue, so the DAQ callback never deadlocks on a
             // full queue after the writer has given up.
             _writerError = e.Message;
+            DataLoss?.Invoke($"Writing to disk failed: {e.Message}");
+            DrainAfterFailure(queue);
         }
     }
 
-    private void ShutdownWriter()
+    private void DrainAfterFailure(Channel<PendingChunk> queue)
     {
-        BlockingCollection<PendingChunk>? queue = _writeQueue;
-        Thread? thread = _writerThread;
-        _writeQueue = null;
-        _writerThread = null;
+        while (queue.Reader.TryRead(out PendingChunk chunk))
+        {
+            ArrayPool<double>.Shared.Return(chunk.Buffer);
+            Stats.OnChunkDropped();
+        }
+    }
 
+    private void MonitorLoop()
+    {
+        Channel<PendingChunk>? queue = _monitorQueue;
         if (queue is null) return;
 
-        queue.CompleteAdding();
-        thread?.Join(TimeSpan.FromSeconds(30));
+        while (true)
+        {
+            if (!queue.Reader.TryRead(out PendingChunk chunk))
+            {
+                if (!queue.Reader.WaitToReadAsync().AsTask().GetAwaiter().GetResult()) break;
+                continue;
+            }
+
+            try
+            {
+                MonitorChunkReady?.Invoke(
+                    new ReadOnlyMemory<double>(chunk.Buffer, 0, chunk.ChannelCount * chunk.SampleCount),
+                    chunk.SampleCount);
+            }
+            catch (Exception e) when (e is InvalidOperationException or ObjectDisposedException)
+            {
+                // The UI is tearing down; the plot is not worth taking anything else down for.
+            }
+            finally
+            {
+                ArrayPool<double>.Shared.Return(chunk.Buffer);
+            }
+        }
+    }
+
+    private void ShutdownPipelineThreads()
+    {
+        Channel<PendingChunk>? spoolQueue = _spoolQueue;
+        Channel<PendingChunk>? monitorQueue = _monitorQueue;
+        Thread? writer = _writerThread;
+        Thread? monitor = _monitorThread;
+
+        _spoolQueue = null;
+        _monitorQueue = null;
+        _writerThread = null;
+        _monitorThread = null;
+
+        spoolQueue?.Writer.TryComplete();
+        monitorQueue?.Writer.TryComplete();
+
+        writer?.Join(TimeSpan.FromSeconds(60));
+        monitor?.Join(TimeSpan.FromSeconds(5));
 
         // Anything still queued after the join deadline would otherwise leak pooled arrays.
-        while (queue.TryTake(out PendingChunk leftover))
-            ArrayPool<double>.Shared.Return(leftover.Buffer);
+        ReturnRemaining(spoolQueue);
+        ReturnRemaining(monitorQueue);
+    }
 
-        queue.Dispose();
+    private static void ReturnRemaining(Channel<PendingChunk>? queue)
+    {
+        if (queue is null) return;
+        while (queue.Reader.TryRead(out PendingChunk leftover))
+            ArrayPool<double>.Shared.Return(leftover.Buffer);
     }
 
     private void AbortAfterFailedStart()
     {
         StopAndClear(ref _aiTask);
         StopAndClear(ref _diTask);
-        ShutdownWriter();
+        ShutdownPipelineThreads();
         GC.KeepAlive(_callback);
         _callback = null;
 

@@ -69,9 +69,17 @@ dotnet publish winui/src/Ni6451.App/Ni6451.App.csproj -c Release -r win-x64 -p:P
 
 ### Without a Windows machine — GitHub Actions
 
-`.github/workflows/build-winui.yml` builds on `windows-latest` and uploads the published
-folder as a workflow artifact. Push this branch (or trigger the workflow manually from the
-Actions tab) and download `Ni6451-win-x64` from the run.
+`.github/workflows/build-winui.yml` builds on `windows-latest`. Every push to this branch
+produces two downloads, and a tagged push additionally publishes a Release:
+
+| Trigger | Where it lands | Notes |
+| --- | --- | --- |
+| Any push to `6451-WinUI`, or **Run workflow** in the Actions tab | The run's **Artifacts** section: `Ni6451-win-x64` | Needs a GitHub login, expires after 90 days, always a `.zip` |
+| Pushing a tag like `v2.0.0` | **Releases**, as `Ni6451-v2.0.0-win-x64.zip` | Permanent, public, no login needed |
+
+```bash
+git tag v2.0.0 && git push origin v2.0.0
+```
 
 ### What you get
 
@@ -109,6 +117,58 @@ Requirements to run: Windows 10 1809 (build 17763) or newer, x64, plus NI-DAQmx.
 | `channel_select.py` | folded into `LiveTraceView` (as it already was in the Qt UI) |
 | `tests/trigger_tester.py` | `src/Ni6451.Daq/TriggerMonitor.cs` + `ni6451 trigger-test` |
 | `examples/read_example.py` | `src/Ni6451.Core/NpzReader.cs` + `ni6451 dump` (the Python script still works as-is) |
+| *(no equivalent)* | `src/Ni6451.Core/SpoolManifest.cs` — crash recovery |
+| *(no equivalent)* | `src/Ni6451.Core/AcquisitionStats.cs` — live pipeline telemetry |
+
+## The acquisition pipeline
+
+The single biggest structural change from the Python version. `daq_worker.py` did everything
+on the DAQmx callback thread — read, decimate for the plot, buffer, and every ten seconds
+write 640 MB to disk — because under the GIL splitting that across threads would not have
+bought anything. Here the stages genuinely run at the same time:
+
+```
+  DAQmx callback thread          spool writer thread            monitor thread
+  ─────────────────────          ───────────────────            ──────────────
+  read AI buffer          ──┐    drain bounded queue            drain lossy queue
+  read DI (trigger)         ├──► write per-channel files  ┐     raise MonitorChunkReady
+  take one strided copy   ──┘    (fanned out over the     │     │
+  post to both queues            thread pool)             │     ▼
+                                 flush + manifest         │     rolling buffer ──► 16 Win2D plots
+                                                          ▼
+                                                     ai0.raw … ai15.raw
+```
+
+- The **write queue is bounded** (`AppConfig.WriteQueueCapacity`, ~2 s). If the disk falls
+  behind, the queue fills and the callback waits — real backpressure, visible in the status
+  bar's *Queue* meter long before anything is at risk.
+- The **monitor queue is lossy** (drops its oldest frame when full). A slow or stalled UI
+  degrades the live plot and can never apply backpressure to the recording.
+- Decimation happens on the callback thread, but the rolling buffer is touched only from the
+  monitor thread. The UI holds that buffer's lock while copying out a frame — several
+  megabytes at a 30 s window — and that delay must never reach the hardware path.
+- Per-channel spool writes are fanned out with `Parallel.For` above
+  `AppConfig.ParallelWriteThreshold` channels. They target independent `FileStream` objects,
+  so the copies and any buffer-full syscalls overlap. This is precisely what the GIL made
+  pointless in Python.
+- The merge double-buffers its reads: the next block is pulled from the spool file with
+  overlapped I/O while the current one is written into the archive.
+
+## Data safety
+
+| Failure | What protects you |
+| --- | --- |
+| The app crashes | Data is spooled continuously, never held in a 640 MB RAM buffer. Everything already written survives in the OS page cache. |
+| Power cut | Spool files are `fsync`'d every `AppConfig.DurableFlushIntervalSec` (30 s), on top of the 10 s flush out of the process. |
+| Either, mid-run | A `manifest.json` beside the spool records the channels, rate, run numbering and trigger index, rewritten atomically on every flush. |
+| Recovering afterwards | Choosing an output folder scans it for interrupted runs and offers **Recover now**. Same thing from the CLI: `ni6451 recover <folder> --apply`. |
+| Disk too slow | The *Queue* meter shows how far behind the writer is; a run that came close reports it afterwards. |
+| Driver buffer overrun | DAQmx `-200279` / `-200361` are detected specifically, counted, and reported as data loss — the recording up to that point is still saved. |
+| A failed merge | The partial `.npz` is deleted, but the spool files and manifest are deliberately kept, so the run can simply be recovered. |
+
+The sample count used during recovery is re-derived from the raw file lengths rather than
+read from the manifest, and the *minimum* across channels is taken — so a run cut off
+mid-chunk yields an aligned recording rather than one ragged channel.
 
 ## Dependency swaps
 
@@ -131,8 +191,34 @@ ni6451 devices                                  # list NI-DAQmx devices
 ni6451 dump recording.npz                       # summarise a recording
 ni6451 dump recording.npz --csv out.csv         # ... and export CSV
 ni6451 trigger-test --device Dev2 --line port0/line0
+ni6451 recover /path/to/output                  # list interrupted runs
+ni6451 recover /path/to/output --apply          # ... and merge them into .npz files
 ni6451 selftest                                 # no hardware needed, runs on any OS
 ```
+
+---
+
+## The interface
+
+Laid out for Windows 11 rather than transliterated from the Qt window:
+
+- **Mica** window backdrop and an extended title bar.
+- **Two panes.** Everything you set before pressing Start lives in a fixed left rail; the
+  right side is the live experiment. The old single vertical stack pushed the traces — the
+  thing you actually watch — below the fold.
+- **Start and Stop are pinned** below the scrolling rail, so they can never be scrolled out
+  of reach during a run.
+- **Readout tiles** for normal stress, shear stress, LVDT and trigger state, as large
+  tabular figures that do not jitter as they update ten times a second.
+- **Inline `InfoBar` notifications instead of modal dialogs.** A modal error dialog during a
+  run is actively harmful: it steals focus from the Stop button while the hardware keeps
+  streaming. Errors, data loss and recovery offers all appear as dismissible bars.
+- **A telemetry status bar**: elapsed time, bytes written, throughput, and the write-queue
+  meter, plus a progress bar for the merge (which used to be an opaque wait).
+- **Light and dark**, including the Win2D plots — their palettes live in `AppConfig`
+  alongside the other tunable parameters and switch with `ActualTheme`.
+- Free disk space is translated into *minutes of recording at the current channel count*,
+  which is the number that actually matters before pressing Start.
 
 ---
 

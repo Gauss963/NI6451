@@ -30,23 +30,48 @@ public sealed class NpzWriter : IDisposable
     /// <summary>
     /// Append a 1-D <c>float64</c> array read from a raw little-endian spool file.
     /// <paramref name="count"/> is the number of samples, not bytes.
+    ///
+    /// Reads are double-buffered: the next block is pulled from the spool file with overlapped
+    /// I/O while the current one is being written into the archive, so a merge is bounded by
+    /// the slower of the two devices instead of by their sum. On a multi-gigabyte recording
+    /// that roughly halves the wait.
     /// </summary>
-    public void AddFloat64FromRawFile(string name, string rawPath, long count)
+    /// <param name="onBytesWritten">Invoked per block with the byte count, for progress reporting.</param>
+    public void AddFloat64FromRawFile(string name, string rawPath, long count, Action<int>? onBytesWritten = null)
     {
         using Stream entry = CreateEntry(name);
         NpyFormat.WriteHeader(entry, NpyFormat.Float64Descr, count);
 
         long remaining = count * sizeof(double);
-        using var src = new FileStream(rawPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1 << 20);
+        using var src = new FileStream(rawPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                                       bufferSize: 0, options: FileOptions.SequentialScan | FileOptions.Asynchronous);
 
-        byte[] block = new byte[CopyBlockBytes];
+        byte[] front = new byte[CopyBlockBytes];
+        byte[] back = new byte[CopyBlockBytes];
+
+        Task<int> pending = ReadBlockAsync(src, front, (int)Math.Min(remaining, front.Length));
         while (remaining > 0)
         {
-            int want = (int)Math.Min(remaining, block.Length);
-            src.ReadExactly(block, 0, want);
-            entry.Write(block, 0, want);
-            remaining -= want;
+            int n = pending.GetAwaiter().GetResult();
+            if (n == 0) throw new EndOfStreamException($"Spool file '{rawPath}' is shorter than the recorded sample count.");
+
+            remaining -= n;
+
+            // Start the next read before writing, so the two overlap.
+            pending = ReadBlockAsync(src, back, (int)Math.Min(remaining, back.Length));
+
+            entry.Write(front, 0, n);
+            onBytesWritten?.Invoke(n);
+
+            (front, back) = (back, front);
         }
+    }
+
+    private static async Task<int> ReadBlockAsync(Stream source, byte[] buffer, int count)
+    {
+        if (count <= 0) return 0;
+        await source.ReadExactlyAsync(buffer.AsMemory(0, count)).ConfigureAwait(false);
+        return count;
     }
 
     /// <summary>Append a 1-D <c>float64</c> array held in memory.</summary>

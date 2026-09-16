@@ -1,8 +1,8 @@
+using System.Globalization;
 using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.Geometry;
 using Microsoft.Graphics.Canvas.Text;
 using Microsoft.Graphics.Canvas.UI.Xaml;
-using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Ni6451.Core;
@@ -12,7 +12,7 @@ namespace Ni6451.App.Controls;
 
 /// <summary>
 /// One row combining a checkbox (channel on/off) with a small live line plot for that
-/// channel. Toggling the checkbox immediately restyles the plot (grey = off) regardless of
+/// channel. Toggling the checkbox immediately restyles the plot (greyed = off) regardless of
 /// whether an acquisition is currently running -- this is purely a UI state, decided before
 /// Start is pressed.
 ///
@@ -20,23 +20,20 @@ namespace Ni6451.App.Controls;
 /// a Win2D <see cref="CanvasControl"/>: the trace is drawn straight onto a Direct2D surface
 /// instead of going through a chart library, which is what keeps 16 of these repainting at
 /// 20 fps affordable.
+///
+/// The palette follows the system light/dark setting, which a Matplotlib figure baked into a
+/// Qt widget could not do -- a white plot face in a dark window is the single most obvious
+/// way for an app to look unfinished on Windows 11.
 /// </summary>
 public sealed partial class ChannelPlot : UserControl, IDisposable
 {
-    private static readonly Color OnColor = ParseHex(AppConfig.ChannelOnColor);
-    private static readonly Color OffColor = ParseHex(AppConfig.ChannelOffColor);
-    private static readonly Color OffFaceColor = ParseHex(AppConfig.ChannelOffFaceColor);
-    private static readonly Color OnFaceColor = Microsoft.UI.Colors.White;
-    private static readonly Color FrameColor = Color.FromArgb(255, 160, 160, 160);
-    private static readonly Color ZeroLineColor = Color.FromArgb(255, 220, 220, 220);
-    private static readonly Color LabelColor = Color.FromArgb(255, 110, 110, 110);
-
     /// <summary>Width reserved on the left of the canvas for the y tick labels.</summary>
     private const float LabelGutter = 30f;
 
     private readonly float[] _samples = new float[AppConfig.MaxPlotPoints];
     private readonly CanvasTextFormat _tickFormat = new() { FontSize = 9 };
 
+    private Palette _palette = Palette.ForTheme(ElementTheme.Light);
     private int _sampleCount;
     private double _yRange = AppConfig.DefaultYRange;
     private bool _disposed;
@@ -44,6 +41,9 @@ public sealed partial class ChannelPlot : UserControl, IDisposable
     public ChannelPlot()
     {
         InitializeComponent();
+
+        ActualThemeChanged += OnActualThemeChanged;
+        Loaded += (_, _) => ApplyTheme();
     }
 
     public ChannelPlot(int channel) : this()
@@ -94,10 +94,19 @@ public sealed partial class ChannelPlot : UserControl, IDisposable
 
     // ---------- internal ----------
 
+    private void OnActualThemeChanged(FrameworkElement sender, object args) => ApplyTheme();
+
+    private void ApplyTheme()
+    {
+        _palette = Palette.ForTheme(ActualTheme);
+        PlotCanvas.Invalidate();
+    }
+
     private void OnCheckToggled(object sender, RoutedEventArgs e)
     {
         bool enabled = IsChannelEnabled;
         if (!enabled) _sampleCount = 0;
+        EnableCheckBox.Opacity = enabled ? 1.0 : 0.55;
         PlotCanvas.Invalidate();
         EnabledChanged?.Invoke(this, enabled);
     }
@@ -105,25 +114,25 @@ public sealed partial class ChannelPlot : UserControl, IDisposable
     private void OnDraw(CanvasControl sender, CanvasDrawEventArgs args)
     {
         CanvasDrawingSession ds = args.DrawingSession;
+        Palette p = _palette;
         bool enabled = IsChannelEnabled;
 
         float width = (float)sender.Size.Width;
         float height = (float)sender.Size.Height;
         if (width <= LabelGutter + 2 || height <= 4) return;
 
-        ds.Clear(enabled ? OnFaceColor : OffFaceColor);
+        ds.Clear(enabled ? p.Face : p.OffFace);
 
         float plotLeft = LabelGutter;
         float plotWidth = width - LabelGutter;
         float midY = height / 2f;
 
-        ds.DrawLine(plotLeft, midY, width, midY, ZeroLineColor, 1f);
-        ds.DrawRectangle(plotLeft + 0.5f, 0.5f, plotWidth - 1f, height - 1f, FrameColor, 1f);
+        ds.DrawLine(plotLeft, midY, width, midY, p.ZeroLine, 1f);
 
         string top = FormatTick(_yRange);
-        ds.DrawText(top, 2, 1, LabelColor, _tickFormat);
-        ds.DrawText("0", 2, midY - 7, LabelColor, _tickFormat);
-        ds.DrawText("-" + top, 2, height - 15, LabelColor, _tickFormat);
+        ds.DrawText(top, 2, 1, p.Label, _tickFormat);
+        ds.DrawText("0", 2, midY - 7, p.Label, _tickFormat);
+        ds.DrawText("-" + top, 2, height - 15, p.Label, _tickFormat);
 
         if (_sampleCount < 2) return;
 
@@ -140,23 +149,52 @@ public sealed partial class ChannelPlot : UserControl, IDisposable
         builder.EndFigure(CanvasFigureLoop.Open);
 
         using CanvasGeometry geometry = CanvasGeometry.CreatePath(builder);
-        ds.DrawGeometry(geometry, enabled ? OnColor : OffColor, 1f);
+        ds.DrawGeometry(geometry, enabled ? p.Trace : p.OffTrace, 1.2f);
     }
 
     /// <summary>Keep out-of-range samples on the canvas instead of letting Direct2D draw far off-surface.</summary>
     private static float ClampY(float y, float height) => Math.Clamp(y, -1f, height + 1f);
 
     private static string FormatTick(double value)
-        => value >= 1 ? value.ToString("0.#") : value.ToString("0.##");
+        => value >= 1
+            ? value.ToString("0.#", CultureInfo.InvariantCulture)
+            : value.ToString("0.##", CultureInfo.InvariantCulture);
 
-    private static Color ParseHex(string hex)
+    /// <summary>
+    /// Win2D draws with raw colours rather than XAML brushes, so the theme has to be resolved
+    /// into concrete values here. Both sets live in <see cref="AppConfig"/> with the rest of
+    /// the tunable parameters.
+    /// </summary>
+    private readonly record struct Palette(
+        Color Face, Color OffFace, Color Trace, Color OffTrace, Color ZeroLine, Color Label)
     {
-        ReadOnlySpan<char> s = hex.AsSpan(hex.StartsWith('#') ? 1 : 0);
-        return Color.FromArgb(
-            255,
-            byte.Parse(s[..2], System.Globalization.NumberStyles.HexNumber),
-            byte.Parse(s.Slice(2, 2), System.Globalization.NumberStyles.HexNumber),
-            byte.Parse(s.Slice(4, 2), System.Globalization.NumberStyles.HexNumber));
+        private static readonly Palette Light = new(
+            ParseHex(AppConfig.ChannelFaceColor),
+            ParseHex(AppConfig.ChannelOffFaceColor),
+            ParseHex(AppConfig.ChannelOnColor),
+            ParseHex(AppConfig.ChannelOffColor),
+            ParseHex(AppConfig.ChannelZeroLineColor),
+            ParseHex(AppConfig.ChannelLabelColor));
+
+        private static readonly Palette Dark = new(
+            ParseHex(AppConfig.ChannelFaceColorDark),
+            ParseHex(AppConfig.ChannelOffFaceColorDark),
+            ParseHex(AppConfig.ChannelOnColorDark),
+            ParseHex(AppConfig.ChannelOffColorDark),
+            ParseHex(AppConfig.ChannelZeroLineColorDark),
+            ParseHex(AppConfig.ChannelLabelColorDark));
+
+        public static Palette ForTheme(ElementTheme theme) => theme == ElementTheme.Dark ? Dark : Light;
+
+        private static Color ParseHex(string hex)
+        {
+            ReadOnlySpan<char> s = hex.AsSpan(hex.StartsWith('#') ? 1 : 0);
+            return Color.FromArgb(
+                255,
+                byte.Parse(s[..2], NumberStyles.HexNumber, CultureInfo.InvariantCulture),
+                byte.Parse(s.Slice(2, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture),
+                byte.Parse(s.Slice(4, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture));
+        }
     }
 
     /// <summary>
@@ -167,6 +205,7 @@ public sealed partial class ChannelPlot : UserControl, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        ActualThemeChanged -= OnActualThemeChanged;
         _tickFormat.Dispose();
         PlotCanvas.RemoveFromVisualTree();
     }

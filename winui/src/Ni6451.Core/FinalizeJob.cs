@@ -19,11 +19,17 @@ public sealed record FinalizeRequest(
     string Sh,
     int Rn);
 
+/// <summary>How far along a merge is, for a progress bar.</summary>
+public readonly record struct FinalizeProgress(int ChannelsDone, int ChannelCount, long BytesWritten, long TotalBytes)
+{
+    public double Fraction => TotalBytes <= 0 ? 0 : Math.Clamp((double)BytesWritten / TotalBytes, 0, 1);
+}
+
 /// <summary>
 /// Merges the temporary per-channel raw files into a single <c>.npz</c>. This step is
 /// I/O-bound and can take a long time for large recordings, so callers must run it off
-/// the UI thread (see <c>MainWindow.StopAcquisitionAsync</c>) or the application will
-/// appear to hang -- the same reason the Python version used a background QThread.
+/// the UI thread (see <c>MainWindow.FinalizeAsync</c>) or the application will appear to
+/// hang -- the same reason the Python version used a background QThread.
 /// </summary>
 public static class FinalizeJob
 {
@@ -31,15 +37,21 @@ public static class FinalizeJob
     /// Write the archive and delete the spool files on success. Returns the output path.
     /// On failure the partially written <c>.npz</c> is removed but the raw spool files are
     /// deliberately kept: they are the only copy of the captured data, so they are left in
-    /// place for manual recovery.
+    /// place -- manifest included -- for recovery.
     /// </summary>
-    public static string Run(FinalizeRequest request, CancellationToken cancellationToken = default)
+    public static string Run(
+        FinalizeRequest request,
+        IProgress<FinalizeProgress>? progress = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
         string fileName = $"T{request.Sh}-raw-run{request.Rn.ToString(CultureInfo.InvariantCulture)}-{timestamp}.npz";
         string outPath = Path.Combine(request.SaveDir, fileName);
+
+        long totalBytes = request.SamplesPerChannel * sizeof(double) * request.Channels.Count;
+        long bytesWritten = 0;
 
         try
         {
@@ -48,10 +60,17 @@ public static class FinalizeJob
                 for (int i = 0; i < request.Channels.Count; i++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+
+                    int channelsDone = i;
                     npz.AddFloat64FromRawFile(
                         $"ai{request.Channels[i]}",
                         Path.Combine(request.TempDir, $"ai{request.Channels[i]}.raw"),
-                        request.SamplesPerChannel);
+                        request.SamplesPerChannel,
+                        n =>
+                        {
+                            bytesWritten += n;
+                            progress?.Report(new FinalizeProgress(channelsDone, request.Channels.Count, bytesWritten, totalBytes));
+                        });
                 }
 
                 npz.AddInt64Scalar("sample_rate", AppConfig.Rate);
@@ -61,7 +80,8 @@ public static class FinalizeJob
                 npz.AddInt64Scalar("trigger_sample_index", request.TriggerSampleIndex ?? -1);
             }
 
-            RemoveSpool(request);
+            progress?.Report(new FinalizeProgress(request.Channels.Count, request.Channels.Count, totalBytes, totalBytes));
+            MarkCompleteAndRemoveSpool(request);
             return outPath;
         }
         catch
@@ -72,13 +92,29 @@ public static class FinalizeJob
         }
     }
 
-    private static void RemoveSpool(FinalizeRequest request)
+    private static void MarkCompleteAndRemoveSpool(FinalizeRequest request)
     {
+        // Flag the manifest first: if the directory delete then fails for any reason, recovery
+        // will skip the leftovers instead of offering to merge an already-merged recording.
+        try
+        {
+            SpoolManifest? manifest = SpoolManifest.TryLoad(request.TempDir);
+            if (manifest is not null)
+            {
+                manifest.Completed = true;
+                manifest.Save(request.TempDir);
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+        }
+
         try
         {
             foreach (int ch in request.Channels)
                 TryDelete(Path.Combine(request.TempDir, $"ai{ch}.raw"));
 
+            TryDelete(SpoolManifest.PathIn(request.TempDir));
             if (Directory.Exists(request.TempDir)) Directory.Delete(request.TempDir);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)

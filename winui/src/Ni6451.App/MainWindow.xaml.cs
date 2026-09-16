@@ -1,4 +1,3 @@
-using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -13,11 +12,15 @@ using WinRT.Interop;
 namespace Ni6451.App;
 
 /// <summary>
-/// Assembles the UI (device selection, output folder, Start/Stop, live trace display with
-/// inline channel checkboxes, live sensor readout) and wires user actions to
-/// <see cref="DaqAcquisition"/> and <see cref="FinalizeJob"/>.
+/// Assembles the UI and wires user actions to <see cref="DaqAcquisition"/> and
+/// <see cref="FinalizeJob"/>. Port of the Python <c>main_window.py</c>, re-laid-out for
+/// Windows 11: a Mica window with a fixed settings rail on the left, the live experiment on
+/// the right, and a telemetry status bar along the bottom.
 ///
-/// Port of the Python <c>main_window.py</c>.
+/// Errors surface as a dismissible <see cref="InfoBar"/> rather than a modal dialog. During a
+/// run a modal dialog is actively harmful -- it steals focus from the Stop button while the
+/// hardware keeps streaming -- and the Fluent pattern for "something needs your attention but
+/// the app still works" is an inline notification.
 /// </summary>
 public sealed partial class MainWindow : Window
 {
@@ -37,17 +40,14 @@ public sealed partial class MainWindow : Window
     private static readonly (string Label, double Metres)[] Thickness2DOptions =
         [("50 cm (fixed, 9 pistons)", 0.50)];
 
-    private static readonly SolidColorBrush TriggerNoBrush = new(Microsoft.UI.Colors.Red);
-    private static readonly SolidColorBrush TriggerYesBrush = new(Color.FromArgb(255, 0, 90, 220));
-    private static readonly SolidColorBrush ReadoutBrush = new(Color.FromArgb(255, 0, 90, 220));
-
     private readonly DaqAcquisition _daq = new();
     private readonly DispatcherTimer _readoutTimer = new();
 
     private string? _saveDir;
-    private bool _errorDialogOpen;
     private bool _isFinalizing;
     private bool _isClosing;
+    private string? _lastAlert;
+    private IReadOnlyList<OrphanedSpool> _orphans = [];
 
     /// <summary>The off-thread merge itself, so shutdown can wait on it without needing the UI thread.</summary>
     private Task _finalizeWork = Task.CompletedTask;
@@ -60,23 +60,19 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
 
         Title = "USB-6451 Continuous Acquisition";
-        AppWindow.Resize(new SizeInt32(1180, 940));
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(AppTitleBar);
+        AppWindow.Resize(new SizeInt32(1480, 1000));
 
         FixedParamsText.Text =
-            $"Fixed: {AppConfig.Rate:N0} S/s/ch, chunk {AppConfig.Chunk:N0} samples, "
-            + $"spooled to disk continuously (flushed every {AppConfig.FlushIntervalSec}s)";
+            $"{AppConfig.Rate:N0} S/s per channel · {AppConfig.Chunk:N0}-sample chunks · "
+            + $"spooled continuously, flushed every {AppConfig.FlushIntervalSec}s";
 
-        CaptureTriggerCheck.IsChecked = AppConfig.DefaultCaptureTrigger;
+        CaptureTriggerToggle.IsOn = AppConfig.DefaultCaptureTrigger;
         TriggerLineBox.Text = AppConfig.DefaultTriggerLine;
+        TriggerLineBox.IsEnabled = CaptureTriggerToggle.IsOn;
 
-        NormalStressText.Foreground = ReadoutBrush;
-        ShearStressText.Foreground = ReadoutBrush;
-        LvdtText.Foreground = ReadoutBrush;
-        SetTriggerStatus(triggered: false);
-
-        FaultTypeCombo.Items.Add("1D");
-        FaultTypeCombo.Items.Add("2D");
-        FaultTypeCombo.SelectedIndex = 0;   // also populates the thickness list
+        Fault1DRadio.IsChecked = true;   // also populates the thickness list
 
         ShBox.Text = "0207";
         RnBox.Minimum = 0;
@@ -84,14 +80,16 @@ public sealed partial class MainWindow : Window
         RnBox.Value = 1;
         UpdateFileNamePreview();
 
-        _daq.ChunkReady += OnChunkReady;
+        _daq.MonitorChunkReady += OnMonitorChunk;
         _daq.Error += OnDaqError;
+        _daq.DataLoss += OnDataLoss;
 
         _readoutTimer.Interval = TimeSpan.FromMilliseconds(ReadoutIntervalMs);
         _readoutTimer.Tick += OnReadoutTick;
 
         Closed += OnClosed;
 
+        SetStatus("Idle", StatusKind.Idle);
         RefreshDevices();
     }
 
@@ -111,20 +109,23 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex) when (ex is DaqmxException or DllNotFoundException or BadImageFormatException)
         {
-            StatusText.Text = $"Status: could not query NI-DAQmx devices ({ex.Message})";
+            ShowAlert(InfoBarSeverity.Warning, "NI-DAQmx unavailable", ex.Message);
             return;
         }
 
         DeviceCombo.Items.Clear();
         if (devices.Count == 0)
         {
-            StatusText.Text = "Status: no NI-DAQmx devices found (check driver install / USB connection)";
+            ShowAlert(InfoBarSeverity.Warning, "No devices found",
+                "NI-DAQmx reports no connected devices. Check the driver installation and the USB connection, "
+                + "or type the device name in manually.");
             return;
         }
 
         foreach (string d in devices) DeviceCombo.Items.Add(d);
         DeviceCombo.SelectedItem = devices.Contains(current) ? current : devices[0];
         DeviceCombo.Text = DeviceCombo.SelectedItem as string ?? string.Empty;
+        ClearAlert();
     }
 
     private async void OnChooseFolder(object sender, RoutedEventArgs e)
@@ -139,11 +140,116 @@ public sealed partial class MainWindow : Window
         _saveDir = folder.Path;
         OutputFolderText.Text = folder.Path;
         StartButton.IsEnabled = !_isFinalizing && !_daq.IsRunning;
+
+        UpdateDiskFree();
+        ScanForInterruptedRuns();
+    }
+
+    private void UpdateDiskFree()
+    {
+        if (_saveDir is null) return;
+
+        try
+        {
+            string? root = Path.GetPathRoot(Path.GetFullPath(_saveDir));
+            if (root is null) return;
+
+            long free = new DriveInfo(root).AvailableFreeSpace;
+
+            // At the fixed rate, every active channel costs 4 MB/s. Turning free space into
+            // minutes of recording is the number that actually matters before pressing Start.
+            int channels = Math.Max(1, TraceView.EnabledChannels().Length);
+            double bytesPerSecond = (double)AppConfig.Rate * channels * sizeof(double);
+
+            // The merge writes a second full copy alongside the spool before the spool is removed.
+            double minutes = free / bytesPerSecond / 2.0 / 60.0;
+            DiskFreeText.Text =
+                $"{free / (1024.0 * 1024 * 1024):F1} GB free · about {minutes:F0} min at {channels} channel(s)";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            DiskFreeText.Text = string.Empty;
+        }
+    }
+
+    // ---------- crash recovery ----------
+
+    private void ScanForInterruptedRuns()
+    {
+        if (_saveDir is null) return;
+
+        _orphans = SpoolRecovery.FindOrphans(_saveDir);
+        if (_orphans.Count == 0)
+        {
+            RecoveryBar.IsOpen = false;
+            return;
+        }
+
+        double seconds = _orphans.Sum(o => o.DurationSeconds);
+        RecoveryBar.Message =
+            $"{_orphans.Count} acquisition(s) in this folder were interrupted before being saved, "
+            + $"holding about {seconds:F0}s of data. The samples are still on disk and can be recovered.";
+        RecoveryBar.IsOpen = true;
+    }
+
+    private async void OnRecover(object sender, RoutedEventArgs e)
+    {
+        if (_saveDir is null || _orphans.Count == 0) return;
+
+        IReadOnlyList<OrphanedSpool> toRecover = _orphans;
+        RecoverButton.IsEnabled = false;
+        RecoveryBar.IsOpen = false;
+        SetStatus($"Recovering {toRecover.Count} interrupted acquisition(s)…", StatusKind.Busy);
+        ShowSaveProgress(true);
+
+        var progress = new Progress<FinalizeProgress>(p => SaveProgress.Value = p.Fraction * 100);
+        var recovered = new List<string>();
+        string? failure = null;
+
+        try
+        {
+            await Task.Run(() =>
+            {
+                foreach (OrphanedSpool orphan in toRecover)
+                    recovered.Add(SpoolRecovery.Recover(orphan, _saveDir, progress));
+            });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            failure = ex.Message;
+        }
+        finally
+        {
+            ShowSaveProgress(false);
+            RecoverButton.IsEnabled = true;
+        }
+
+        if (failure is not null)
+        {
+            SetStatus("Recovery failed", StatusKind.Error);
+            ShowAlert(InfoBarSeverity.Error, "Recovery failed",
+                $"{failure} The raw spool files were left in place, so nothing was lost — you can retry.");
+        }
+        else
+        {
+            SetStatus($"Recovered {recovered.Count} recording(s)", StatusKind.Idle);
+            ShowAlert(InfoBarSeverity.Success, "Recovery complete",
+                string.Join("\n", recovered.Select(Path.GetFileName)));
+        }
+
+        ScanForInterruptedRuns();
+        UpdateDiskFree();
     }
 
     // ---------- fault setup / naming ----------
 
-    private void OnFaultTypeChanged(object sender, SelectionChangedEventArgs e) => PopulateThicknessOptions();
+    private void OnFaultTypeChanged(object sender, RoutedEventArgs e) => PopulateThicknessOptions();
+
+    private void OnCaptureTriggerToggled(object sender, RoutedEventArgs e)
+    {
+        if (TriggerLineBox is not null)
+            TriggerLineBox.IsEnabled = CaptureTriggerToggle.IsOn && !_daq.IsRunning && !_isFinalizing;
+    }
 
     private void PopulateThicknessOptions()
     {
@@ -158,8 +264,7 @@ public sealed partial class MainWindow : Window
         FaultThicknessCombo.IsEnabled = isOneD && !_daq.IsRunning && !_isFinalizing;
     }
 
-    private FaultType CurrentFaultType
-        => (FaultTypeCombo.SelectedItem as string) == "2D" ? FaultType.TwoD : FaultType.OneD;
+    private FaultType CurrentFaultType => Fault2DRadio.IsChecked == true ? FaultType.TwoD : FaultType.OneD;
 
     private double CurrentFaultThicknessM
     {
@@ -200,33 +305,35 @@ public sealed partial class MainWindow : Window
     private void UpdateFileNamePreview()
     {
         if (FileNamePreviewText is null) return;
-        FileNamePreviewText.Text = $"Will save as: T{CurrentShPadded}-raw-run{CurrentRn}-<timestamp>.npz";
+        FileNamePreviewText.Text = $"T{CurrentShPadded}-raw-run{CurrentRn}-<timestamp>.npz";
     }
 
     // ---------- acquisition control ----------
 
-    private async void OnStart(object sender, RoutedEventArgs e)
+    private void OnStart(object sender, RoutedEventArgs e)
     {
         string device = DeviceCombo.Text.Trim();
         if (string.IsNullOrEmpty(device))
         {
-            await ShowMessageAsync("Notice", "Please select or enter a device name.");
+            ShowAlert(InfoBarSeverity.Warning, "No device", "Select or type a device name first.");
             return;
         }
 
         if (_saveDir is null)
         {
-            await ShowMessageAsync("Notice", "Please choose an output folder.");
+            ShowAlert(InfoBarSeverity.Warning, "No output folder", "Choose a folder for the recording first.");
             return;
         }
 
         int[] enabled = TraceView.EnabledChannels();
         if (enabled.Length == 0)
         {
-            await ShowMessageAsync("Notice", "Select at least one channel to acquire.");
+            ShowAlert(InfoBarSeverity.Warning, "No channels", "Tick at least one channel to acquire.");
             return;
         }
 
+        ClearAlert();
+        RecoveryBar.IsOpen = false;
         SetControlsLocked(true);
 
         // Capture the naming/fault settings now, so later edits don't retroactively affect
@@ -234,22 +341,19 @@ public sealed partial class MainWindow : Window
         _currentSh = CurrentShPadded;
         _currentRn = CurrentRn;
 
-        SetTriggerStatus(triggered: false);
-        NormalStressText.Text = "Normal: -- MPa";
-        ShearStressText.Text = "Shear: -- MPa";
-        LvdtText.Text = "LVDT: -- mm";
+        SetTriggerTile(triggered: false);
+        NormalStressText.Text = "—";
+        ShearStressText.Text = "—";
+        LvdtText.Text = "—";
 
-        _daq.Start(
-            device,
-            _saveDir,
-            enabled,
-            CaptureTriggerCheck.IsChecked == true,
-            TriggerLineBox.Text.Trim());
+        var manifest = new SpoolManifest { Sh = _currentSh, Rn = _currentRn };
+        _daq.Start(device, _saveDir, enabled, CaptureTriggerToggle.IsOn, TriggerLineBox.Text.Trim(), manifest);
 
         if (_daq.IsRunning)
         {
             StopButton.IsEnabled = true;
-            StatusText.Text = $"Status: acquiring ({AppConfig.Rate:N0} S/s x {enabled.Length}ch)";
+            SetStatus($"Acquiring · {AppConfig.Rate:N0} S/s × {enabled.Length} channels", StatusKind.Recording);
+            StatsPanel.Visibility = Visibility.Visible;
             TraceView.Start(enabled);
             _readoutTimer.Start();
         }
@@ -259,26 +363,27 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void OnStop(object sender, RoutedEventArgs e) => await StopAcquisitionAsync();
+    private void OnStop(object sender, RoutedEventArgs e) => StopAcquisition();
 
-    private async Task StopAcquisitionAsync()
+    private void StopAcquisition()
     {
         StopButton.IsEnabled = false;
         TraceView.Stop();
         _readoutTimer.Stop();
-        SetTriggerStatus(triggered: false);
+        SetTriggerTile(triggered: false);
+        StatsPanel.Visibility = Visibility.Collapsed;
 
         AcquisitionResult? result = _daq.StopAcquisition();
         if (result is null)
         {
-            StatusText.Text = "Status: idle";
+            SetStatus("Idle", StatusKind.Idle);
             SetControlsLocked(false);
-            await ShowMessageAsync("Notice", "No data was acquired.");
+            ShowAlert(InfoBarSeverity.Informational, "Nothing recorded", "The run produced no samples.");
             return;
         }
 
-        StatusText.Text =
-            $"Status: saving {result.SamplesPerChannel:N0} samples/channel in the background, please wait...";
+        SetStatus($"Saving {result.SamplesPerChannel:N0} samples/channel…", StatusKind.Busy);
+        ShowSaveProgress(true);
 
         // Controls stay locked until the background save finishes, so a new acquisition
         // can't be started while the previous one is still being written.
@@ -287,32 +392,64 @@ public sealed partial class MainWindow : Window
             result.TempDir, result.SamplesPerChannel, _saveDir!, result.Channels,
             result.TriggerSampleIndex, _currentSh, _currentRn);
 
-        // Deliberately not awaited: Stop returns immediately and the status label is updated
-        // when the merge lands, which is how the Qt version behaved with its FinalizeWorker
-        // thread. Awaiting here would stall an error dialog behind a multi-minute save.
-        _ = FinalizeAsync(request, result.TriggerSampleIndex, result.SamplesPerChannel);
+        // Deliberately not awaited: Stop returns immediately and the status bar is updated
+        // when the merge lands, which is how the Qt version behaved with its FinalizeWorker.
+        _ = FinalizeAsync(request, result);
     }
 
-    private async Task FinalizeAsync(FinalizeRequest request, long? triggerSampleIndex, long nSamples)
+    private async Task FinalizeAsync(FinalizeRequest request, AcquisitionResult result)
     {
+        var progress = new Progress<FinalizeProgress>(p => SaveProgress.Value = p.Fraction * 100);
+
         try
         {
-            Task<string> work = Task.Run(() => FinalizeJob.Run(request));
+            Task<string> work = Task.Run(() => FinalizeJob.Run(request, progress));
             _finalizeWork = work;
             string outPath = await work;
 
-            string triggerText = triggerSampleIndex is { } idx ? $", trigger at sample {idx:N0}" : string.Empty;
-            StatusText.Text = $"Status: saved {outPath} ({nSamples:N0} samples/channel{triggerText})";
+            string trigger = result.TriggerSampleIndex is { } idx ? $" · trigger at sample {idx:N0}" : string.Empty;
+            SetStatus($"Saved {Path.GetFileName(outPath)} · {result.SamplesPerChannel:N0} samples/channel{trigger}",
+                      StatusKind.Idle);
+
+            ReportRunQuality(result);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            StatusText.Text = "Status: error while saving";
-            await ShowMessageAsync("Save Error", ex.Message);
+            SetStatus("Save failed", StatusKind.Error);
+            ShowAlert(InfoBarSeverity.Error, "Save failed",
+                $"{ex.Message} The raw spool files were kept, so the data is still recoverable — "
+                + "reopen the output folder to be offered a recovery.");
         }
         finally
         {
+            ShowSaveProgress(false);
             _isFinalizing = false;
-            if (!_isClosing) SetControlsLocked(false);
+            if (!_isClosing)
+            {
+                SetControlsLocked(false);
+                UpdateDiskFree();
+                ScanForInterruptedRuns();
+            }
+        }
+    }
+
+    /// <summary>Summarise how the pipeline coped, so a marginal setup is noticed before the next run.</summary>
+    private void ReportRunQuality(AcquisitionResult result)
+    {
+        AcquisitionSnapshot s = result.Stats;
+        if (s.HasDataLoss)
+        {
+            ShowAlert(InfoBarSeverity.Error, "Samples were lost during this run",
+                $"{s.Overruns} driver overrun(s) and {s.DroppedChunks} dropped chunk(s). "
+                + "Everything that reached the disk was saved. Use fewer channels, or a faster output drive.");
+            return;
+        }
+
+        if (s.PeakQueueDepth > s.QueueCapacity * 0.75)
+        {
+            ShowAlert(InfoBarSeverity.Warning, "The disk only just kept up",
+                $"The write queue reached {s.PeakQueueDepth} of {s.QueueCapacity} at {s.MegabytesPerSecond:F0} MB/s. "
+                + "No data was lost, but a longer run on this drive may not be safe.");
         }
     }
 
@@ -322,9 +459,10 @@ public sealed partial class MainWindow : Window
         StartButton.IsEnabled = !locked && _saveDir is not null;
         DeviceCombo.IsEnabled = !locked;
         RefreshButton.IsEnabled = !locked;
-        CaptureTriggerCheck.IsEnabled = !locked;
-        TriggerLineBox.IsEnabled = !locked;
-        FaultTypeCombo.IsEnabled = !locked;
+        CaptureTriggerToggle.IsEnabled = !locked;
+        TriggerLineBox.IsEnabled = !locked && CaptureTriggerToggle.IsOn;
+        Fault1DRadio.IsEnabled = !locked;
+        Fault2DRadio.IsEnabled = !locked;
         FaultThicknessCombo.IsEnabled = !locked && CurrentFaultType == FaultType.OneD;
         ShBox.IsEnabled = !locked;
         RnBox.IsEnabled = !locked;
@@ -334,13 +472,16 @@ public sealed partial class MainWindow : Window
 
     // ---------- live data ----------
 
-    /// <summary>Runs on the DAQmx callback thread; must not touch XAML.</summary>
-    private void OnChunkReady(ReadOnlyMemory<double> chunk, int nSamples)
+    /// <summary>
+    /// Runs on the acquisition's monitor thread, never on the DAQmx callback thread, so the
+    /// rolling buffer's lock can never be contended by the hardware path.
+    /// </summary>
+    private void OnMonitorChunk(ReadOnlyMemory<double> chunk, int nSamples)
         => TraceView.PushChunk(chunk.Span, nSamples);
 
     private void OnReadoutTick(object? sender, object e)
     {
-        SetTriggerStatus(_daq.TriggerSampleIndex is not null);
+        SetTriggerTile(_daq.TriggerSampleIndex is not null);
 
         // Read the fault setup once per tick: the Python version only evaluated it inside
         // the ai0 branch, so a run with ai0 deselected but ai1 selected raised NameError
@@ -349,76 +490,121 @@ public sealed partial class MainWindow : Window
         double thicknessM = CurrentFaultThicknessM;
 
         NormalStressText.Text = _daq.TryGetLatestVoltage(ChNormalStress, out double v0)
-            ? $"Normal: {UnitConversion.GetNormalStress(v0, faultType, thicknessM) / 1e6:F1} MPa"
-            : "Normal: -- MPa";
+            ? $"{UnitConversion.GetNormalStress(v0, faultType, thicknessM) / 1e6:F1}"
+            : "—";
 
         ShearStressText.Text = _daq.TryGetLatestVoltage(ChShearStress, out double v1)
-            ? $"Shear: {UnitConversion.GetShearStress(v1, faultType, thicknessM) / 1e6:F1} MPa"
-            : "Shear: -- MPa";
+            ? $"{UnitConversion.GetShearStress(v1, faultType, thicknessM) / 1e6:F1}"
+            : "—";
 
         LvdtText.Text = _daq.TryGetLatestVoltage(ChLvdt, out double v2)
-            ? $"LVDT: {UnitConversion.GetLvdtDisplacement(v2) * 1000:F1} mm"
-            : "LVDT: -- mm";
+            ? $"{UnitConversion.GetLvdtDisplacement(v2) * 1000:F1}"
+            : "—";
+
+        UpdateStats(_daq.Stats.Snapshot());
     }
 
-    private void SetTriggerStatus(bool triggered)
+    private void UpdateStats(AcquisitionSnapshot s)
     {
-        TriggerStatusText.Text = triggered ? "Trigger: Yes" : "Trigger: No";
-        TriggerStatusText.Foreground = triggered ? TriggerYesBrush : TriggerNoBrush;
+        StatElapsed.Text = s.Elapsed.TotalHours >= 1
+            ? $"{(int)s.Elapsed.TotalHours}:{s.Elapsed.Minutes:00}:{s.Elapsed.Seconds:00}"
+            : $"{s.Elapsed.Minutes}:{s.Elapsed.Seconds:00}";
+
+        double mb = s.BytesSpooled / (1024.0 * 1024.0);
+        StatWritten.Text = mb >= 1024 ? $"{mb / 1024:F2} GB" : $"{mb:F0} MB";
+        StatThroughput.Text = $"{s.MegabytesPerSecond:F0} MB/s";
+
+        StatQueueBar.Value = s.QueuePressure;
+        StatQueue.Text = $"{s.QueuePressure * 100:F0}%";
+        StatQueueBar.ShowError = s.QueuePressure > 0.75;
+    }
+
+    private void SetTriggerTile(bool triggered)
+    {
+        TriggerValueText.Text = triggered ? "Fired" : "Waiting";
+        TriggerIcon.Glyph = triggered ? "" : "";
+
+        Brush brush = triggered
+            ? (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"]
+            : (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"];
+        TriggerIcon.Foreground = brush;
+        TriggerValueText.Foreground = brush;
+    }
+
+    // ---------- status and alerts ----------
+
+    private enum StatusKind { Idle, Recording, Busy, Error }
+
+    private void SetStatus(string text, StatusKind kind)
+    {
+        StatusText.Text = text;
+        StatusDot.Fill = kind switch
+        {
+            StatusKind.Recording => (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"],
+            StatusKind.Busy => (Brush)Application.Current.Resources["SystemFillColorCautionBrush"],
+            StatusKind.Error => (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"],
+            _ => (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
+        };
+    }
+
+    private void ShowSaveProgress(bool visible)
+    {
+        SaveProgress.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        if (visible) SaveProgress.Value = 0;
+    }
+
+    private void ShowAlert(InfoBarSeverity severity, string title, string message)
+    {
+        if (_isClosing) return;
+
+        string key = severity + title + message;
+        if (key == _lastAlert && AlertBar.IsOpen) return;   // don't restate an error already on screen
+        _lastAlert = key;
+
+        AlertBar.Severity = severity;
+        AlertBar.Title = title;
+        AlertBar.Message = message;
+        AlertBar.IsOpen = true;
+    }
+
+    private void ClearAlert()
+    {
+        AlertBar.IsOpen = false;
+        _lastAlert = null;
     }
 
     // ---------- errors ----------
 
     /// <summary>May be raised on a background thread, so it hops to the UI thread first.</summary>
-    private void OnDaqError(string message)
-    {
-        if (DispatcherQueue.HasThreadAccess) _ = HandleDaqErrorAsync(message);
-        else DispatcherQueue.TryEnqueue(() => _ = HandleDaqErrorAsync(message));
-    }
+    private void OnDaqError(string message) => OnUiThread(() => HandleDaqError(message));
 
-    private async Task HandleDaqErrorAsync(string message)
+    private void OnDataLoss(string message) =>
+        OnUiThread(() => ShowAlert(InfoBarSeverity.Error, "Data loss", message));
+
+    private void HandleDaqError(string message)
     {
         // Treat a hardware error the same as pressing Stop: properly close the task(s) and
-        // try to salvage whatever was already captured, instead of leaving an orphaned task
-        // running in the background with the Stop button disabled.
+        // salvage whatever was already captured, instead of leaving an orphaned task running
+        // in the background with the Stop button disabled.
         if (_daq.IsRunning)
         {
-            await StopAcquisitionAsync();
+            StopAcquisition();
         }
         else
         {
             TraceView.Stop();
             _readoutTimer.Stop();
+            StatsPanel.Visibility = Visibility.Collapsed;
             if (!_isFinalizing) SetControlsLocked(false);
         }
 
-        await ShowMessageAsync("DAQ Error", message);
+        ShowAlert(InfoBarSeverity.Error, "DAQ error", message);
     }
 
-    private async Task ShowMessageAsync(string title, string message)
+    private void OnUiThread(Action action)
     {
-        if (_errorDialogOpen || _isClosing) return;   // a dialog for a previous, likely related, error is showing
-
-        _errorDialogOpen = true;
-        try
-        {
-            var dialog = new ContentDialog
-            {
-                Title = title,
-                Content = message,
-                CloseButtonText = "OK",
-                XamlRoot = Root.XamlRoot,
-            };
-            await dialog.ShowAsync();
-        }
-        catch (Exception e) when (e is InvalidOperationException or ArgumentException)
-        {
-            // The window is going away underneath the dialog; the message is not worth crashing over.
-        }
-        finally
-        {
-            _errorDialogOpen = false;
-        }
+        if (DispatcherQueue.HasThreadAccess) action();
+        else DispatcherQueue.TryEnqueue(() => action());
     }
 
     // ---------- shutdown ----------

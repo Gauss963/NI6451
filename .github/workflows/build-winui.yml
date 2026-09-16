@@ -11,6 +11,8 @@ on:
     paths:
       - 'winui/**'
       - '.github/workflows/build-winui.yml'
+    tags:
+      - 'v*'
   pull_request:
     branches: [6451-WinUI]
     paths:
@@ -20,6 +22,10 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+
+    # Only needed by the tagged-release step below; harmless for ordinary branch builds.
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +58,7 @@ jobs:
           name: Ni6451-win-x64
           path: artifacts/win-x64
           if-no-files-found: error
+          retention-days: 90
 
       - name: Upload the command line tool
         uses: actions/upload-artifact@v4
@@ -59,3 +66,21 @@ jobs:
           name: ni6451-cli-win-x64
           path: artifacts/win-x64-tools
           if-no-files-found: error
+          retention-days: 90
+
+      # Artifacts need a GitHub login and expire. A tagged build additionally gets a
+      # permanent, publicly downloadable zip attached to a Release.
+      - name: Attach to the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = "Ni6451-$env:GITHUB_REF_NAME-win-x64.zip"
+          Compress-Archive -Path artifacts/win-x64/* -DestinationPath $zip
+          gh release view $env:GITHUB_REF_NAME 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:GITHUB_REF_NAME --title $env:GITHUB_REF_NAME --generate-notes $zip
+          } else {
+            gh release upload $env:GITHUB_REF_NAME $zip --clobber
+          }

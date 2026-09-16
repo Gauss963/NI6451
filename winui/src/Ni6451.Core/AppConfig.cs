@@ -24,6 +24,29 @@ public static class AppConfig
     /// <summary>Samples/channel accumulated before the spool files are flushed to the OS.</summary>
     public const long FlushSamples = (long)Rate * FlushIntervalSec;
 
+    /// <summary>
+    /// How often the spool files are additionally fsync'd all the way to the drive.
+    ///
+    /// The two cadences protect against different failures. The 10 s flush pushes data out of
+    /// the process into the OS page cache, which is what survives an application crash -- the
+    /// likely case, and the one the Python version could lose up to 10 s of data to because it
+    /// held that much in RAM. The fsync here is what additionally survives a power cut, and it
+    /// is deliberately slower: forcing ~2 GB of dirty pages to the drive can stall for longer
+    /// than the writer queue can absorb, which would push back on the acquisition itself.
+    /// </summary>
+    public const int DurableFlushIntervalSec = 30;
+
+    public const long DurableFlushSamples = (long)Rate * DurableFlushIntervalSec;
+
+    /// <summary>
+    /// Chunks the spool writer may fall behind by before the DAQ callback is made to wait.
+    /// At 16 channels this is about 2 s of acquisition, or 128 MB of pooled buffers.
+    /// </summary>
+    public const int WriteQueueCapacity = 200;
+
+    /// <summary>Channel count at or above which per-channel spool writes are fanned out across threads.</summary>
+    public const int ParallelWriteThreshold = 8;
+
     /// <summary>UI redraw interval in ms (20 fps), decoupled from the DAQ callback rate.</summary>
     public const int PlotRefreshMs = 50;
 
@@ -44,11 +67,26 @@ public static class AppConfig
     public const double MaxYRange = 10.0;
     public const double DefaultYRange = 10.0;
 
-    /// <summary>Live-plot styling for channels that are turned off (not being acquired).</summary>
-    public const string ChannelOnColor = "#1F77B4";
+    // ---- live-plot palette ----
+    // Two sets, because the window follows the Windows light/dark setting. The light trace
+    // colour is the original Matplotlib C0 blue; the dark one is lifted to keep the same
+    // contrast ratio against a dark plot face.
 
+    public const string ChannelOnColor = "#1F77B4";
     public const string ChannelOffColor = "#B0B0B0";
-    public const string ChannelOffFaceColor = "#E8E8E8";
+    public const string ChannelOffFaceColor = "#ECECEC";
+    public const string ChannelFaceColor = "#FFFFFF";
+    public const string ChannelFrameColor = "#C8C8C8";
+    public const string ChannelZeroLineColor = "#E4E4E4";
+    public const string ChannelLabelColor = "#6E6E6E";
+
+    public const string ChannelOnColorDark = "#4DA6E8";
+    public const string ChannelOffColorDark = "#5A5A5A";
+    public const string ChannelOffFaceColorDark = "#232323";
+    public const string ChannelFaceColorDark = "#1B1B1B";
+    public const string ChannelFrameColorDark = "#3A3A3A";
+    public const string ChannelZeroLineColorDark = "#2E2E2E";
+    public const string ChannelLabelColorDark = "#9A9A9A";
 
     /// <summary>External TTL trigger capture (e.g. from another DAQ's Trigger Out). PFI0.</summary>
     public const string DefaultTriggerLine = "port0/line0";
