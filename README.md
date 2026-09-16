@@ -62,7 +62,8 @@ All tunable parameters (sample rate, chunk size, flush interval, plot refresh ra
 
 ## C# / WinUI 3 port
 
-A full rewrite of this application in C# and WinUI 3 lives on the `6451-WinUI` branch, under
-`winui/`. It targets the same hardware and writes the same `.npz` files, so recordings from
-either version are interchangeable and `examples/read_example.py` reads both. See
-[winui/README.md](winui/README.md) on that branch for how to build the Windows executable.
+A full rewrite of this application in C# and WinUI 3 lives under [`winui/`](winui/). It
+targets the same hardware and writes the same `.npz` files, so recordings from either version
+are interchangeable and `examples/read_example.py` reads both. Prebuilt Windows executables are
+on the [Releases](https://github.com/Gauss963/NI6451/releases) page; see
+[winui/README.md](winui/README.md) for how to build them.

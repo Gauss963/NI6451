@@ -7,25 +7,22 @@ name: Build WinUI (x64)
 
 on:
   push:
-    branches: [6451-WinUI]
+    branches: [main, 6451-WinUI]
     paths:
       - 'winui/**'
       - '.github/workflows/build-winui.yml'
     tags:
       - 'v*'
   pull_request:
-    branches: [6451-WinUI]
+    branches: [main, 6451-WinUI]
     paths:
       - 'winui/**'
+      - '.github/workflows/build-winui.yml'
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
-
-    # Only needed by the tagged-release step below; harmless for ordinary branch builds.
-    permissions:
-      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -76,23 +73,6 @@ jobs:
           path: artifacts/win-x64-tools
           if-no-files-found: error
           retention-days: 90
-
-      # Artifacts need a GitHub login and expire. A tagged build additionally gets a
-      # permanent, publicly downloadable zip attached to a Release.
-      - name: Attach to the GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $zip = "Ni6451-$env:GITHUB_REF_NAME-win-x64.zip"
-          Compress-Archive -Path artifacts/win-x64/* -DestinationPath $zip
-          gh release view $env:GITHUB_REF_NAME 2>$null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create $env:GITHUB_REF_NAME --title $env:GITHUB_REF_NAME --generate-notes $zip
-          } else {
-            gh release upload $env:GITHUB_REF_NAME $zip --clobber
-          }
 
   # Native AOT build of the application. WinUI 3 cannot be a single file (its XAML runtime,
   # resources.pri, .winmd and native DLLs have to be loose files next to the exe), but AOT
@@ -146,3 +126,49 @@ jobs:
           path: artifacts/win-x64-aot-symbols
           if-no-files-found: error
           retention-days: 90
+
+  # Artifacts need a GitHub login and expire after 90 days. A tagged build additionally gets
+  # every flavour attached to a permanent, publicly downloadable GitHub Release.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, build-aot]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Zip each flavour
+        run: |
+          set -e
+          v="$GITHUB_REF_NAME"
+          (cd artifacts/Ni6451-win-x64-aot   && zip -qr "../Ni6451-$v-win-x64-aot.zip" .)
+          (cd artifacts/Ni6451-win-x64       && zip -qr "../Ni6451-$v-win-x64.zip" .)
+          (cd artifacts/ni6451-cli-win-x64   && zip -qr "../ni6451-cli-$v-win-x64.zip" .)
+          ls -lh artifacts/*.zip
+
+      - name: Create or update the Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          v="$GITHUB_REF_NAME"
+          cat > notes.md <<EOF
+          | File | What it is |
+          | --- | --- |
+          | \`Ni6451-$v-win-x64-aot.zip\` | **Recommended.** Native AOT build: the app and the .NET runtime compiled into \`Ni6451.exe\`. |
+          | \`Ni6451-$v-win-x64.zip\` | Standard self-contained .NET build. Same behaviour, more files. Fallback. |
+          | \`ni6451-cli-$v-win-x64.zip\` | The command line tool as a single native exe: \`devices\`, \`dump\`, \`recover\`, \`trigger-test\`, \`selftest\`. |
+
+          Unpack the whole folder and run \`Ni6451.exe\`. Requires Windows 10 1809+ x64 and the NI-DAQmx driver; nothing else needs to be installed.
+
+          If the window does not appear, send \`%LOCALAPPDATA%\\Ni6451\\startup.log\`.
+          EOF
+          if gh release view "$v" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$v" artifacts/*.zip --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$v" artifacts/*.zip --title "$v" --notes-file notes.md --repo "$GITHUB_REPOSITORY"
+          fi

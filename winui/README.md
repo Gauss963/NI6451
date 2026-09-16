@@ -1,12 +1,11 @@
 # USB-6451 Continuous Acquisition — WinUI 3 rewrite
 
 A C# / WinUI 3 (Windows App SDK) port of the PySide6 application that lives at the
-repository root on the `main` branch. Same hardware, same acquisition strategy, same output
-files — different UI stack and no Python runtime.
+repository root. Same hardware, same acquisition strategy, same output files — different UI
+stack and no Python runtime.
 
-Everything new lives under `winui/`. **No file on the `main` branch is modified by this
-branch**, apart from four pointer lines appended to the root `README.md`, so `main` keeps
-working exactly as it did and the two implementations can be maintained side by side.
+Everything C# lives under `winui/`; the Python application at the root is untouched and keeps
+working exactly as it did, so the two implementations can be maintained side by side.
 
 ---
 
@@ -84,8 +83,8 @@ produces two downloads, and a tagged push additionally publishes a Release:
 
 | Trigger | Where it lands | Notes |
 | --- | --- | --- |
-| Any push to `6451-WinUI`, or **Run workflow** in the Actions tab | The run's **Artifacts** section: `Ni6451-win-x64` | Needs a GitHub login, expires after 90 days, always a `.zip` |
-| Pushing a tag like `v2.0.0` | **Releases**, as `Ni6451-v2.0.0-win-x64.zip` | Permanent, public, no login needed |
+| Any push to `main` touching `winui/`, or **Run workflow** in the Actions tab | The run's **Artifacts** section | Needs a GitHub login, expires after 90 days |
+| Pushing a tag like `v2.0.0` | **Releases**: `Ni6451-v2.0.0-win-x64-aot.zip`, `Ni6451-v2.0.0-win-x64.zip`, `ni6451-cli-v2.0.0-win-x64.zip` | Permanent, public, no login needed |
 
 ```bash
 git tag v2.0.0 && git push origin v2.0.0
