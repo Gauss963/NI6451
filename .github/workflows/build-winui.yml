@@ -34,24 +34,31 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      # Every dotnet invocation runs from winui/, so winui/global.json applies. Without it the
+      # runner's default SDK (currently .NET 10) is selected, and Windows App SDK 1.6 then looks
+      # for its PRI build task under an SDK layout that does not exist there.
       - name: Restore
-        run: dotnet restore winui/Ni6451.sln
+        working-directory: winui
+        run: dotnet restore Ni6451.sln
 
       - name: Self-test (rolling buffer, unit conversions, .npz format)
-        run: dotnet run --project winui/src/Ni6451.Tools/Ni6451.Tools.csproj -c Release -- selftest
+        working-directory: winui
+        run: dotnet run --project src/Ni6451.Tools/Ni6451.Tools.csproj -c Release -- selftest
 
       - name: Publish x64
+        working-directory: winui
         run: >
-          dotnet publish winui/src/Ni6451.App/Ni6451.App.csproj
+          dotnet publish src/Ni6451.App/Ni6451.App.csproj
           -c Release -r win-x64 -p:Platform=x64 --self-contained true
           -v normal
-          -o artifacts/win-x64
+          -o ../artifacts/win-x64
 
       - name: Publish the command line tool
+        working-directory: winui
         run: >
-          dotnet publish winui/src/Ni6451.Tools/Ni6451.Tools.csproj
+          dotnet publish src/Ni6451.Tools/Ni6451.Tools.csproj
           -c Release -r win-x64 --self-contained true
-          -o artifacts/win-x64-tools
+          -o ../artifacts/win-x64-tools
 
       - name: Upload the application
         uses: actions/upload-artifact@v4

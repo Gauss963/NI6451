@@ -50,8 +50,13 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
     throw 'The .NET SDK was not found on PATH. Install .NET SDK 8.0 and try again.'
 }
 
+# Run from winui/ so winui/global.json selects the .NET 8 SDK. Windows App SDK 1.6 resolves
+# its PRI build task against that SDK's layout and fails under a newer one.
+Push-Location (Join-Path $repoRoot 'winui')
+try {
+
 Write-Host '==> Restoring' -ForegroundColor Cyan
-dotnet restore (Join-Path $repoRoot 'winui/Ni6451.sln')
+dotnet restore Ni6451.sln
 
 Write-Host '==> Running the hardware-independent self-test' -ForegroundColor Cyan
 dotnet run --project $toolsProject -c $Configuration -- selftest
@@ -65,6 +70,9 @@ dotnet publish $appProject `
     --self-contained true `
     -o $OutputPath
 if ($LASTEXITCODE -ne 0) { throw "Publish failed (exit code $LASTEXITCODE)." }
+
+}
+finally { Pop-Location }
 
 $exe = Join-Path $OutputPath 'Ni6451.exe'
 if (-not (Test-Path $exe)) { throw "Publish finished but $exe is missing." }
