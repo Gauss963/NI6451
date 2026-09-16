@@ -20,6 +20,9 @@
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <SelfContained>true</SelfContained>
 
+    <!-- Program.cs supplies Main so startup can be logged and a failure shown; see StartupLog. -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+
     <Platforms>x64</Platforms>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PublishReadyToRun>false</PublishReadyToRun>
@@ -45,5 +48,21 @@
     <ProjectReference Include="..\Ni6451.Core\Ni6451.Core.csproj" />
     <ProjectReference Include="..\Ni6451.Daq\Ni6451.Daq.csproj" />
   </ItemGroup>
+
+  <!-- The App SDK publishes a Microsoft.ui.xaml.dll.mui for ninety-odd languages, each in its
+       own folder. They only localise the XAML framework's own strings (e.g. the text in a
+       ContentDialog's default buttons); the neutral copy is embedded in the DLL itself, so
+       dropping a language folder loses nothing but that translation. Keep English and
+       Traditional Chinese and delete the rest — it is most of the clutter in the output. -->
+  <Target Name="TrimAppSdkLanguageFolders" AfterTargets="Publish" Condition="'$(PublishDir)' != ''">
+    <ItemGroup>
+      <_AppSdkMui Include="$(PublishDir)*\Microsoft.ui.xaml.dll.mui" />
+      <_AppSdkMuiDir Include="@(_AppSdkMui->'%(RootDir)%(Directory)')" />
+      <_AppSdkMuiDirToRemove Include="@(_AppSdkMuiDir)"
+        Condition="!$([System.String]::Copy('%(Identity)').ToLowerInvariant().TrimEnd('\').EndsWith('en-us')) and !$([System.String]::Copy('%(Identity)').ToLowerInvariant().TrimEnd('\').EndsWith('zh-tw'))" />
+    </ItemGroup>
+    <RemoveDir Directories="@(_AppSdkMuiDirToRemove)" />
+    <Message Importance="high" Text="Removed @(_AppSdkMuiDirToRemove->Count()) App SDK language folders from the publish output." />
+  </Target>
 
 </Project>

@@ -3,10 +3,8 @@ using Microsoft.UI.Xaml;
 namespace Ni6451.App;
 
 /// <summary>
-/// Application entry point. Equivalent of the Python <c>main.py</c>: construct the main
-/// window and show it. The Windows App SDK generates the actual <c>Main</c> (including the
-/// unpackaged bootstrapper initialisation) because the project sets
-/// <c>WindowsPackageType=None</c> together with <c>WindowsAppSDKSelfContained=true</c>.
+/// The XAML application. Equivalent of the Python <c>main.py</c>: construct the main window
+/// and show it. The process entry point itself lives in <see cref="Program"/>.
 /// </summary>
 public partial class App : Application
 {
@@ -14,12 +12,35 @@ public partial class App : Application
 
     public App()
     {
+        StartupLog.Write("App ctor: InitializeComponent");
         InitializeComponent();
+
+        // XAML-thread exceptions do not reach AppDomain.UnhandledException reliably; this is
+        // the hook that sees a failure inside a handler or during a layout pass.
+        UnhandledException += (_, e) =>
+        {
+            StartupLog.Fatal("Unhandled exception in the UI", e.Exception);
+            // Leave e.Handled false: continuing after an unknown UI failure risks a silent,
+            // half-working acquisition, which is worse than an honest exit.
+        };
+
+        StartupLog.Write("App ctor: done");
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        _window = new MainWindow();
-        _window.Activate();
+        StartupLog.Write("OnLaunched: constructing MainWindow");
+        try
+        {
+            _window = new MainWindow();
+            StartupLog.Write("OnLaunched: activating MainWindow");
+            _window.Activate();
+            StartupLog.Write("OnLaunched: window activated");
+        }
+        catch (Exception e)
+        {
+            StartupLog.Fatal("The main window could not be created.", e);
+            throw;
+        }
     }
 }

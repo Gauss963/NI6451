@@ -57,7 +57,9 @@ public sealed partial class MainWindow : Window
 
     public MainWindow()
     {
+        StartupLog.Write("MainWindow: InitializeComponent");
         InitializeComponent();
+        StartupLog.Write("MainWindow: XAML loaded");
 
         Title = "USB-6451 Continuous Acquisition";
         ExtendsContentIntoTitleBar = true;
@@ -90,7 +92,9 @@ public sealed partial class MainWindow : Window
         Closed += OnClosed;
 
         SetStatus("Idle", StatusKind.Idle);
+        StartupLog.Write("MainWindow: querying NI-DAQmx devices");
         RefreshDevices();
+        StartupLog.Write("MainWindow: ready");
     }
 
     private FrameworkElement Root => (FrameworkElement)Content;
@@ -525,8 +529,8 @@ public sealed partial class MainWindow : Window
         TriggerIcon.Glyph = triggered ? "" : "";
 
         Brush brush = triggered
-            ? (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"]
-            : (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"];
+            ? ThemeBrush("SystemFillColorSuccessBrush", 0x0F, 0x7B, 0x0F)
+            : ThemeBrush("TextFillColorTertiaryBrush", 0x8A, 0x8A, 0x8A);
         TriggerIcon.Foreground = brush;
         TriggerValueText.Foreground = brush;
     }
@@ -540,11 +544,38 @@ public sealed partial class MainWindow : Window
         StatusText.Text = text;
         StatusDot.Fill = kind switch
         {
-            StatusKind.Recording => (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"],
-            StatusKind.Busy => (Brush)Application.Current.Resources["SystemFillColorCautionBrush"],
-            StatusKind.Error => (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"],
-            _ => (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
+            StatusKind.Recording => ThemeBrush("SystemFillColorCriticalBrush", 0xC4, 0x2B, 0x1C),
+            StatusKind.Busy => ThemeBrush("SystemFillColorCautionBrush", 0x9D, 0x5D, 0x00),
+            StatusKind.Error => ThemeBrush("SystemFillColorCriticalBrush", 0xC4, 0x2B, 0x1C),
+            _ => ThemeBrush("TextFillColorTertiaryBrush", 0x8A, 0x8A, 0x8A),
         };
+    }
+
+    private readonly Dictionary<string, Brush> _brushCache = new();
+
+    /// <summary>
+    /// Resolve a theme brush by key, falling back to a fixed colour if the lookup fails.
+    /// Indexing <c>Application.Current.Resources</c> directly throws on a missing key, and
+    /// the constructor is not the place to find out a resource name was wrong.
+    /// </summary>
+    private Brush ThemeBrush(string key, byte r, byte g, byte b)
+    {
+        if (_brushCache.TryGetValue(key, out Brush? cached)) return cached;
+
+        Brush brush;
+        try
+        {
+            brush = Application.Current.Resources.TryGetValue(key, out object? value) && value is Brush themed
+                ? themed
+                : new SolidColorBrush(Color.FromArgb(255, r, g, b));
+        }
+        catch (Exception e) when (e is InvalidCastException or ArgumentException or System.Runtime.InteropServices.COMException)
+        {
+            brush = new SolidColorBrush(Color.FromArgb(255, r, g, b));
+        }
+
+        _brushCache[key] = brush;
+        return brush;
     }
 
     private void ShowSaveProgress(bool visible)
