@@ -22,6 +22,9 @@
 .PARAMETER OutputPath
     Where to place the published output. Defaults to winui/artifacts/win-x64.
 
+.PARAMETER Aot
+    Publish with Native AOT. Removes the ~170 .NET runtime DLLs from the output.
+
 .EXAMPLE
     pwsh winui/build/build-win-x64.ps1
 #>
@@ -29,7 +32,10 @@
 param(
     [ValidateSet('Release', 'Debug')]
     [string]$Configuration = 'Release',
-    [string]$OutputPath
+    [string]$OutputPath,
+    # Native AOT: compiles the app and the .NET runtime into Ni6451.exe (~70 files instead of
+    # ~280). Needs the Visual Studio C++ build tools for the native linker.
+    [switch]$Aot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -63,11 +69,12 @@ dotnet run --project $toolsProject -c $Configuration -- selftest
 if ($LASTEXITCODE -ne 0) { throw "Self-test failed (exit code $LASTEXITCODE)." }
 
 Write-Host "==> Publishing $Configuration | x64 to $OutputPath" -ForegroundColor Cyan
+$aotArgs = if ($Aot) { @('-p:PublishAot=true') } else { @('--self-contained', 'true') }
 dotnet publish $appProject `
     -c $Configuration `
     -r win-x64 `
     -p:Platform=x64 `
-    --self-contained true `
+    @aotArgs `
     -o $OutputPath
 if ($LASTEXITCODE -ne 0) { throw "Publish failed (exit code $LASTEXITCODE)." }
 

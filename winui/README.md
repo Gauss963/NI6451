@@ -93,11 +93,41 @@ git tag v2.0.0 && git push origin v2.0.0
 
 ### What you get
 
-An **unpackaged, self-contained** folder: `Ni6451.exe` next to the .NET runtime and the
-Windows App SDK. The target machine needs nothing pre-installed except the NI-DAQmx driver,
-which supplies `nicaiu.dll`. Ship the whole folder — `Ni6451.exe` alone will not start.
+Two flavours of the application, and the CLI:
+
+| Artifact | What it is | Files |
+| --- | --- | --- |
+| `Ni6451-win-x64-aot` | **Native AOT.** The app and the entire .NET runtime compiled into `Ni6451.exe`; only the Windows App SDK and Win2D DLLs sit beside it. | ~70 |
+| `Ni6451-win-x64` | Standard self-contained .NET publish. Same behaviour, plus ~170 `System.*.dll` runtime files. Kept as the fallback if the AOT toolchain ever breaks. | ~280 |
+| `ni6451-cli-win-x64` | The command line tool as a **single native `ni6451.exe`**. | 1 |
+
+Both application flavours are **unpackaged and self-contained**: the target machine needs
+nothing pre-installed except the NI-DAQmx driver, which supplies `nicaiu.dll`. Ship the whole
+folder — `Ni6451.exe` alone will not start.
+
+> **Why not one static `.exe`?** WinUI 3 does not support single-file publishing: the XAML
+> runtime (`Microsoft.ui.xaml.dll`), `resources.pri`, the `.winmd` metadata and the other
+> App SDK native libraries have to exist as loose files next to the executable. Native AOT
+> is the closest the platform gets — it eliminates the .NET runtime files, which were most of
+> the clutter. The CLI, having no XAML, does compile down to a single file.
 
 Requirements to run: Windows 10 1809 (build 17763) or newer, x64, plus NI-DAQmx.
+
+To build the AOT flavour locally, add `-p:PublishAot=true` to the publish command (needs the
+"Desktop development with C++" workload of Visual Studio Build Tools, for the native linker).
+
+### If double-clicking `Ni6451.exe` does nothing
+
+A GUI process has no console, so a failure before the first window is shown would otherwise
+be silent. The app writes a breadcrumb log to
+
+```
+%LOCALAPPDATA%\Ni6451\startup.log
+```
+
+and a fatal startup error is also shown in a plain Windows message box. The log records how
+far startup got (COM init → App → XAML loaded → device query → ready) and the full stack of
+whatever stopped it. Send that file along when reporting a launch problem.
 
 ---
 
@@ -127,6 +157,7 @@ Requirements to run: Windows 10 1809 (build 17763) or newer, x64, plus NI-DAQmx.
 | `channel_select.py` | folded into `LiveTraceView` (as it already was in the Qt UI) |
 | `tests/trigger_tester.py` | `src/Ni6451.Daq/TriggerMonitor.cs` + `ni6451 trigger-test` |
 | `examples/read_example.py` | `src/Ni6451.Core/NpzReader.cs` + `ni6451 dump` (the Python script still works as-is) |
+| *(no equivalent)* | `src/Ni6451.App/Program.cs` + `StartupLog.cs` — logged startup and crash reporting |
 | *(no equivalent)* | `src/Ni6451.Core/SpoolManifest.cs` — crash recovery |
 | *(no equivalent)* | `src/Ni6451.Core/AcquisitionStats.cs` — live pipeline telemetry |
 
