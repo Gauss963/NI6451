@@ -44,6 +44,7 @@ jobs:
         run: >
           dotnet publish winui/src/Ni6451.App/Ni6451.App.csproj
           -c Release -r win-x64 -p:Platform=x64 --self-contained true
+          -v normal
           -o artifacts/win-x64
 
       - name: Publish the command line tool

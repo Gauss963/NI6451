@@ -23,7 +23,7 @@
         <!-- ================= title bar ================= -->
         <Grid x:Name="AppTitleBar" Grid.Row="0" Height="40">
             <StackPanel Orientation="Horizontal" Spacing="10" Margin="14,0,0,0" VerticalAlignment="Center">
-                <TextBlock Text="USB-6451 Continuous Acquisition" Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center" />
+                <TextBlock Text="USB-6451 Continuous Acquisition" FontSize="12" VerticalAlignment="Center" />
             </StackPanel>
         </Grid>
 
@@ -266,7 +266,7 @@
 
                 <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
                     <Ellipse x:Name="StatusDot" Width="8" Height="8" Fill="{ThemeResource TextFillColorTertiaryBrush}" VerticalAlignment="Center" />
-                    <TextBlock x:Name="StatusText" Text="Idle" Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                    <TextBlock x:Name="StatusText" Text="Idle" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                     <ProgressBar x:Name="SaveProgress" Width="160" Visibility="Collapsed" VerticalAlignment="Center" />
                 </StackPanel>
 
