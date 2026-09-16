@@ -24,6 +24,9 @@ public static class NpyFormat
     public const string Float64Descr = "<f8";
     public const string Int64Descr = "<i8";
 
+    /// <summary>Only ever read, never written: see <see cref="NpzReader.ReadInt64Array"/>.</summary>
+    public const string Int32Descr = "<i4";
+
     /// <summary>
     /// Write the <c>.npy</c> prologue. Pass <paramref name="shape"/> as an empty array
     /// for a 0-D scalar array, or a single element for a 1-D array.
@@ -175,7 +178,7 @@ public readonly record struct NpyHeader(string Descr, long[] Shape)
     public int ItemSize => Descr switch
     {
         NpyFormat.Float64Descr or NpyFormat.Int64Descr => 8,
-        "<i4" or "<f4" => 4,
+        NpyFormat.Int32Descr or "<f4" => 4,
         _ => throw new NotSupportedException($"Unsupported dtype '{Descr}'."),
     };
 }

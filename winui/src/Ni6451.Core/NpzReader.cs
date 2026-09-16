@@ -4,6 +4,13 @@ using System.Runtime.InteropServices;
 namespace Ni6451.Core;
 
 /// <summary>
+/// Callback for <see cref="NpzReader.StreamFloat64"/>. A named delegate rather than
+/// <c>Action&lt;ReadOnlySpan&lt;double&gt;&gt;</c> because a ref struct cannot be a generic
+/// type argument.
+/// </summary>
+public delegate void Float64BlockHandler(ReadOnlySpan<double> block);
+
+/// <summary>
 /// Reads back the <c>.npz</c> archives this application writes. Used by the
 /// <c>Ni6451.Tools</c> command line utility and by the format self-test; the
 /// acquisition path itself never needs it.
@@ -36,15 +43,37 @@ public sealed class NpzReader : IDisposable
         return v[0];
     }
 
+    /// <summary>
+    /// Read a 0-D or 1-D integer array, widening <c>&lt;i4</c> to <see cref="long"/>.
+    /// The narrower dtype matters in practice: NumPy 1.x on Windows makes
+    /// <c>np.array(500000)</c> an <c>int32</c>, so recordings written by the Python
+    /// application on a lab machine store <c>sample_rate</c>, <c>channels</c> and
+    /// <c>trigger_sample_index</c> as <c>&lt;i4</c> rather than the <c>&lt;i8</c> this
+    /// application writes.
+    /// </summary>
     public long[] ReadInt64Array(string name)
     {
         using Stream s = OpenArray(name);
         NpyHeader h = NpyFormat.ReadHeader(s);
-        if (h.Descr != NpyFormat.Int64Descr)
-            throw new NotSupportedException($"Array '{name}' has dtype '{h.Descr}', expected '{NpyFormat.Int64Descr}'.");
 
         var result = new long[h.Count];
-        s.ReadExactly(MemoryMarshal.AsBytes(result.AsSpan()));
+        switch (h.Descr)
+        {
+            case NpyFormat.Int64Descr:
+                s.ReadExactly(MemoryMarshal.AsBytes(result.AsSpan()));
+                break;
+
+            case NpyFormat.Int32Descr:
+                var narrow = new int[h.Count];
+                s.ReadExactly(MemoryMarshal.AsBytes(narrow.AsSpan()));
+                for (long i = 0; i < h.Count; i++) result[i] = narrow[i];
+                break;
+
+            default:
+                throw new NotSupportedException(
+                    $"Array '{name}' has dtype '{h.Descr}', expected '{NpyFormat.Int64Descr}' or '{NpyFormat.Int32Descr}'.");
+        }
+
         return result;
     }
 
@@ -71,7 +100,7 @@ public sealed class NpzReader : IDisposable
     /// processed without loading them fully. The span handed to <paramref name="onBlock"/>
     /// is only valid for the duration of the callback.
     /// </summary>
-    public long StreamFloat64(string name, int blockSamples, Action<ReadOnlySpan<double>> onBlock)
+    public long StreamFloat64(string name, int blockSamples, Float64BlockHandler onBlock)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(blockSamples, 1);
         ArgumentNullException.ThrowIfNull(onBlock);

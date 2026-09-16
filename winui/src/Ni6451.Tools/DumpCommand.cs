@@ -92,7 +92,7 @@ internal static class DumpCommand
             columns[i] = column;
         }
 
-        using var writer = new StreamWriter(csvPath, false, Encoding.UTF8);
+        using var writer = new StreamWriter(csvPath, false, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         writer.WriteLine("t_s," + string.Join(",", channels.Select(c => $"ai{c}_V")));
 
         var line = new StringBuilder();
