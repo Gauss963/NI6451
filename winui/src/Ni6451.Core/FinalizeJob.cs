@@ -8,7 +8,7 @@ namespace Ni6451.Core;
 /// <param name="SaveDir">Folder the final <c>.npz</c> is written to.</param>
 /// <param name="Channels">Active AI channel numbers, in the spool file order.</param>
 /// <param name="TriggerSampleIndex">AI sample index of the first trigger edge, or null if none.</param>
-/// <param name="Sh">Four-digit, zero-padded sample/shot number used in the file name.</param>
+/// <param name="Sh">Four-digit, zero-padded experiment serial used in the file name (the <c>T{Sh}</c> prefix).</param>
 /// <param name="Rn">Run number used in the file name.</param>
 public sealed record FinalizeRequest(
     string TempDir,

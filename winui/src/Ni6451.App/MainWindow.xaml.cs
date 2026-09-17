@@ -55,6 +55,11 @@ public sealed partial class MainWindow : Window
     private string _currentSh = "0000";
     private int _currentRn;
 
+    /// <summary>Remembered across launches: last experiment serial, run number and date.</summary>
+    private readonly NamingState _naming;
+    private readonly string _namingPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Ni6451", NamingState.FileName);
+
     public MainWindow()
     {
         StartupLog.Write("MainWindow: InitializeComponent");
@@ -76,11 +81,10 @@ public sealed partial class MainWindow : Window
 
         Fault1DRadio.IsChecked = true;   // also populates the thickness list
 
-        ShBox.Text = "0207";
         RnBox.Minimum = 0;
         RnBox.Maximum = 999_999;
-        RnBox.Value = 1;
-        UpdateFileNamePreview();
+        _naming = NamingState.Load(_namingPath);
+        ApplyNextNaming();
 
         _daq.MonitorChunkReady += OnMonitorChunk;
         _daq.Error += OnDaqError;
@@ -304,6 +308,26 @@ public sealed partial class MainWindow : Window
 
     private string CurrentShPadded => ShBox.Text.Trim().PadLeft(4, '0');
 
+    /// <summary>
+    /// Seed the naming fields from the remembered state: same day as the last run keeps the
+    /// serial and advances the run number; a new day advances the serial and starts at run 1.
+    /// The operator can still overtype either field before pressing Start.
+    /// </summary>
+    private void ApplyNextNaming()
+    {
+        (string serial, int run) = _naming.NextFor(DateOnly.FromDateTime(DateTime.Now));
+        ShBox.Text = serial;
+        RnBox.Value = run;
+        UpdateFileNamePreview();
+
+        NamingHintText.Text = string.IsNullOrEmpty(_naming.LastRunDate)
+            ? "No previous run recorded on this machine."
+            : $"Last run: T{NamingState.Pad(_naming.ExperimentSerial)} run {_naming.RunNumber} on {_naming.LastRunDate}. "
+              + (_naming.LastRunDate == NamingState.Format(DateOnly.FromDateTime(DateTime.Now))
+                  ? "Same day, so the run number advanced."
+                  : "New day, so the serial advanced and the run number reset.");
+    }
+
     private int CurrentRn => double.IsNaN(RnBox.Value) ? 0 : (int)RnBox.Value;
 
     private void UpdateFileNamePreview()
@@ -344,6 +368,11 @@ public sealed partial class MainWindow : Window
         // the file this run is about to produce.
         _currentSh = CurrentShPadded;
         _currentRn = CurrentRn;
+
+        // Remember it immediately -- before the hardware starts -- so even a run that ends in
+        // a crash still advances the numbering next time.
+        _naming.RecordRun(_currentSh, _currentRn, DateOnly.FromDateTime(DateTime.Now));
+        _naming.Save(_namingPath);
 
         SetTriggerTile(triggered: false);
         NormalStressText.Text = "—";
@@ -431,6 +460,7 @@ public sealed partial class MainWindow : Window
             if (!_isClosing)
             {
                 SetControlsLocked(false);
+                ApplyNextNaming();   // the run just completed is now "the last run"
                 UpdateDiskFree();
                 ScanForInterruptedRuns();
             }

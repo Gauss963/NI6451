@@ -26,6 +26,7 @@ public sealed class SpoolManifest
 
     public string StartedUtc { get; set; } = string.Empty;
 
+    /// <summary>Experiment serial, four digits zero-padded. Kept as <c>Sh</c> in the JSON so older manifests still load.</summary>
     public string Sh { get; set; } = "0000";
 
     public int Rn { get; set; }

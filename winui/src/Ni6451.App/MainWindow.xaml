@@ -140,13 +140,14 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBox x:Name="ShBox" Grid.Column="0" Header="SH" MaxLength="4" TextChanged="OnNamingChanged" />
+                                    <TextBox x:Name="ShBox" Grid.Column="0" Header="Experiment serial" MaxLength="4" TextChanged="OnNamingChanged" />
                                     <NumberBox x:Name="RnBox" Grid.Column="1" Header="Run" SpinButtonPlacementMode="Compact" SmallChange="1" ValueChanged="OnRunNumberChanged" />
                                 </Grid>
 
                                 <Border Background="{ThemeResource LayerFillColorDefaultBrush}" CornerRadius="4" Padding="8,6">
                                     <TextBlock x:Name="FileNamePreviewText" Style="{StaticResource CardCaptionStyle}" FontFamily="Consolas" TextWrapping="Wrap" />
                                 </Border>
+                                <TextBlock x:Name="NamingHintText" Style="{StaticResource CardCaptionStyle}" />
                             </StackPanel>
                         </Border>
 
