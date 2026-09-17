@@ -57,7 +57,7 @@ internal static class RecoverCommand
             Console.WriteLine($"    channels  : {string.Join(", ", o.Manifest.Channels.Select(c => $"ai{c}"))}");
             Console.WriteLine($"    recovered : {o.RecoverableSamplesPerChannel:N0} samples/channel ({o.DurationSeconds:F1} s)");
             Console.WriteLine($"    trigger   : {(o.Manifest.TriggerSampleIndex >= 0 ? $"sample {o.Manifest.TriggerSampleIndex:N0}" : "none")}");
-            Console.WriteLine($"    would save: T{o.Manifest.Sh}-raw-run{o.Manifest.Rn}-<timestamp>.npz");
+            Console.WriteLine($"    would save: T{o.Manifest.ExperimentSerial}-raw-run{o.Manifest.Rn}-<timestamp>.npz");
             Console.WriteLine();
         }
 

@@ -23,6 +23,7 @@ internal static class SelfTestCommand
         TestFinalizeJobProducesReadableArchive();
         TestCrashRecovery();
         TestAcquisitionStats();
+        TestNamingState();
         TestRollingBuffer();
         TestUnitConversion();
 
@@ -101,7 +102,7 @@ internal static class SelfTestCommand
             int[] channels = [0, 3, 7];
             const int samples = 1000;
 
-            var spool = new ChannelSpool(workDir, channels, new SpoolManifest { Sh = "0207", Rn = 5 });
+            var spool = new ChannelSpool(workDir, channels, new SpoolManifest { ExperimentSerial = "0207", Rn = 5 });
             var chunk = new double[channels.Length * samples];
             for (int c = 0; c < channels.Length; c++)
                 for (int i = 0; i < samples; i++)
@@ -149,7 +150,7 @@ internal static class SelfTestCommand
             const int samples = 800;
 
             // Simulate a run that was killed: data spooled, manifest present, never finalized.
-            var spool = new ChannelSpool(workDir, channels, new SpoolManifest { Sh = "0311", Rn = 9 });
+            var spool = new ChannelSpool(workDir, channels, new SpoolManifest { ExperimentSerial = "0311", Rn = 9 });
             spool.TriggerIndexSource = () => 42L;
 
             var chunk = new double[channels.Length * samples];
@@ -168,7 +169,7 @@ internal static class SelfTestCommand
             OrphanedSpool orphan = orphans[0];
             Check("recovery: sample count is re-derived from the file lengths",
                 orphan.RecoverableSamplesPerChannel == samples);
-            Check("recovery: run numbering survives", orphan.Manifest.Sh == "0311" && orphan.Manifest.Rn == 9);
+            Check("recovery: run numbering survives", orphan.Manifest.ExperimentSerial == "0311" && orphan.Manifest.Rn == 9);
             Check("recovery: trigger index survives", orphan.Manifest.TriggerSampleIndex == 42L);
 
             string outPath = SpoolRecovery.Recover(orphan, workDir);
@@ -224,6 +225,50 @@ internal static class SelfTestCommand
         AcquisitionSnapshot p = parallel.Snapshot();
         Check("stats: interlocked updates survive concurrency",
             p.ChunksAcquired == 1000 && p.SamplesPerChannel == 10_000 && p.QueueDepth == 0 && p.BytesSpooled == 80_000);
+    }
+
+    // ---------- output naming ----------
+
+    private static void TestNamingState()
+    {
+        var today = new DateOnly(2026, 9, 17);
+        var yesterday = new DateOnly(2026, 9, 16);
+
+        var fresh = new NamingState();
+        Check("naming: first launch uses the defaults",
+            fresh.NextFor(today) == (NamingState.DefaultExperimentSerial, NamingState.DefaultRunNumber));
+
+        var state = new NamingState();
+        state.RecordRun("0207", 5, today);
+        Check("naming: same day keeps the serial and advances the run", state.NextFor(today) == ("0207", 6));
+        Check("naming: a new day advances the serial and resets the run",
+            state.NextFor(today.AddDays(1)) == ("0208", 1));
+
+        state.RecordRun("0207", 5, yesterday);
+        Check("naming: 'yesterday' is a new day from today's point of view", state.NextFor(today) == ("0208", 1));
+
+        Check("naming: serial is zero-padded", NamingState.Pad("7") == "0007" && NamingState.Increment("0999") == "1000");
+        Check("naming: a non-numeric serial is left alone", NamingState.Increment("AB12") == "AB12");
+        Check("naming: 9999 rolls to 10000 rather than wrapping", NamingState.Increment("9999") == "10000");
+
+        string path = Path.Combine(Path.GetTempPath(), $"ni6451_selftest_{Guid.NewGuid():N}", NamingState.FileName);
+        try
+        {
+            state.RecordRun("0311", 9, today);
+            state.Save(path);
+            NamingState loaded = NamingState.Load(path);
+            Check("naming: round-trips through the settings file",
+                loaded.ExperimentSerial == "0311" && loaded.RunNumber == 9 && loaded.LastRunDate == "2026-09-17");
+
+            File.WriteAllText(path, "{ this is not json");
+            Check("naming: a corrupt settings file falls back to the defaults",
+                NamingState.Load(path).NextFor(today) == (NamingState.DefaultExperimentSerial, NamingState.DefaultRunNumber));
+        }
+        finally
+        {
+            string? dir = Path.GetDirectoryName(path);
+            if (dir is not null && Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
     }
 
     // ---------- rolling buffer ----------

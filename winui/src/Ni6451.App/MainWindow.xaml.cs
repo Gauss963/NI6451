@@ -52,8 +52,13 @@ public sealed partial class MainWindow : Window
     /// <summary>The off-thread merge itself, so shutdown can wait on it without needing the UI thread.</summary>
     private Task _finalizeWork = Task.CompletedTask;
 
-    private string _currentSh = "0000";
+    private string _currentSerial = "0000";
     private int _currentRn;
+
+    /// <summary>Remembered across launches: last experiment serial, run number and date.</summary>
+    private readonly NamingState _naming;
+    private readonly string _namingPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Ni6451", NamingState.FileName);
 
     public MainWindow()
     {
@@ -76,11 +81,10 @@ public sealed partial class MainWindow : Window
 
         Fault1DRadio.IsChecked = true;   // also populates the thickness list
 
-        ShBox.Text = "0207";
         RnBox.Minimum = 0;
         RnBox.Maximum = 999_999;
-        RnBox.Value = 1;
-        UpdateFileNamePreview();
+        _naming = NamingState.Load(_namingPath);
+        ApplyNextNaming();
 
         _daq.MonitorChunkReady += OnMonitorChunk;
         _daq.Error += OnDaqError;
@@ -284,12 +288,12 @@ public sealed partial class MainWindow : Window
     private void OnNamingChanged(object sender, TextChangedEventArgs e)
     {
         // Stand-in for the Qt QIntValidator(0, 9999): keep the field digits-only.
-        string digits = new(ShBox.Text.Where(char.IsAsciiDigit).ToArray());
-        if (digits != ShBox.Text)
+        string digits = new(SerialBox.Text.Where(char.IsAsciiDigit).ToArray());
+        if (digits != SerialBox.Text)
         {
-            int caret = Math.Max(0, ShBox.SelectionStart - (ShBox.Text.Length - digits.Length));
-            ShBox.Text = digits;
-            ShBox.SelectionStart = Math.Min(caret, digits.Length);
+            int caret = Math.Max(0, SerialBox.SelectionStart - (SerialBox.Text.Length - digits.Length));
+            SerialBox.Text = digits;
+            SerialBox.SelectionStart = Math.Min(caret, digits.Length);
             return;   // the assignment re-enters this handler
         }
 
@@ -302,14 +306,34 @@ public sealed partial class MainWindow : Window
         UpdateFileNamePreview();
     }
 
-    private string CurrentShPadded => ShBox.Text.Trim().PadLeft(4, '0');
+    private string CurrentSerialPadded => SerialBox.Text.Trim().PadLeft(4, '0');
+
+    /// <summary>
+    /// Seed the naming fields from the remembered state: same day as the last run keeps the
+    /// serial and advances the run number; a new day advances the serial and starts at run 1.
+    /// The operator can still overtype either field before pressing Start.
+    /// </summary>
+    private void ApplyNextNaming()
+    {
+        (string serial, int run) = _naming.NextFor(DateOnly.FromDateTime(DateTime.Now));
+        SerialBox.Text = serial;
+        RnBox.Value = run;
+        UpdateFileNamePreview();
+
+        NamingHintText.Text = string.IsNullOrEmpty(_naming.LastRunDate)
+            ? "No previous run recorded on this machine."
+            : $"Last run: T{NamingState.Pad(_naming.ExperimentSerial)} run {_naming.RunNumber} on {_naming.LastRunDate}. "
+              + (_naming.LastRunDate == NamingState.Format(DateOnly.FromDateTime(DateTime.Now))
+                  ? "Same day, so the run number advanced."
+                  : "New day, so the serial advanced and the run number reset.");
+    }
 
     private int CurrentRn => double.IsNaN(RnBox.Value) ? 0 : (int)RnBox.Value;
 
     private void UpdateFileNamePreview()
     {
         if (FileNamePreviewText is null) return;
-        FileNamePreviewText.Text = $"T{CurrentShPadded}-raw-run{CurrentRn}-<timestamp>.npz";
+        FileNamePreviewText.Text = $"T{CurrentSerialPadded}-raw-run{CurrentRn}-<timestamp>.npz";
     }
 
     // ---------- acquisition control ----------
@@ -342,15 +366,20 @@ public sealed partial class MainWindow : Window
 
         // Capture the naming/fault settings now, so later edits don't retroactively affect
         // the file this run is about to produce.
-        _currentSh = CurrentShPadded;
+        _currentSerial = CurrentSerialPadded;
         _currentRn = CurrentRn;
+
+        // Remember it immediately -- before the hardware starts -- so even a run that ends in
+        // a crash still advances the numbering next time.
+        _naming.RecordRun(_currentSerial, _currentRn, DateOnly.FromDateTime(DateTime.Now));
+        _naming.Save(_namingPath);
 
         SetTriggerTile(triggered: false);
         NormalStressText.Text = "—";
         ShearStressText.Text = "—";
         LvdtText.Text = "—";
 
-        var manifest = new SpoolManifest { Sh = _currentSh, Rn = _currentRn };
+        var manifest = new SpoolManifest { ExperimentSerial = _currentSerial, Rn = _currentRn };
         _daq.Start(device, _saveDir, enabled, CaptureTriggerToggle.IsOn, TriggerLineBox.Text.Trim(), manifest);
 
         if (_daq.IsRunning)
@@ -394,7 +423,7 @@ public sealed partial class MainWindow : Window
         _isFinalizing = true;
         var request = new FinalizeRequest(
             result.TempDir, result.SamplesPerChannel, _saveDir!, result.Channels,
-            result.TriggerSampleIndex, _currentSh, _currentRn);
+            result.TriggerSampleIndex, _currentSerial, _currentRn);
 
         // Deliberately not awaited: Stop returns immediately and the status bar is updated
         // when the merge lands, which is how the Qt version behaved with its FinalizeWorker.
@@ -431,6 +460,7 @@ public sealed partial class MainWindow : Window
             if (!_isClosing)
             {
                 SetControlsLocked(false);
+                ApplyNextNaming();   // the run just completed is now "the last run"
                 UpdateDiskFree();
                 ScanForInterruptedRuns();
             }
@@ -468,7 +498,7 @@ public sealed partial class MainWindow : Window
         Fault1DRadio.IsEnabled = !locked;
         Fault2DRadio.IsEnabled = !locked;
         FaultThicknessCombo.IsEnabled = !locked && CurrentFaultType == FaultType.OneD;
-        ShBox.IsEnabled = !locked;
+        SerialBox.IsEnabled = !locked;
         RnBox.IsEnabled = !locked;
         TraceView.SetLocked(locked);
         if (!locked) StopButton.IsEnabled = false;

@@ -26,7 +26,7 @@ Concretely, every recording contains the same arrays it always did:
 | `channels` | `<i8` | `(k,)` | Which `ai` channels were recorded |
 | `trigger_sample_index` | `<i8` | `()` | First TTL rising edge, or `-1` if none |
 
-The file name keeps the `T{SH}-raw-run{RN}-{yyyyMMdd_HHmmss}.npz` pattern. Members are
+The file name keeps the `T{experiment serial}-raw-run{RN}-{yyyyMMdd_HHmmss}.npz` pattern. Members are
 stored uncompressed, exactly as `numpy.savez` writes them.
 
 Reading is deliberately more permissive than writing: the integer arrays are also accepted
@@ -259,6 +259,10 @@ Laid out for Windows 11 rather than transliterated from the Qt window:
   alongside the other tunable parameters and switch with `ActualTheme`.
 - Free disk space is translated into *minutes of recording at the current channel count*,
   which is the number that actually matters before pressing Start.
+- **Output naming remembers itself.** The experiment serial, run number and date of the last
+  run are stored in `%LOCALAPPDATA%\Ni6451\naming.json`. On the same day the run number
+  advances; on a new day the serial advances and the run number resets to 1. Both fields can
+  still be overtyped before Start.
 
 ---
 
