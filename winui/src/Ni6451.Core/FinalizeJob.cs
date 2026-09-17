@@ -8,7 +8,7 @@ namespace Ni6451.Core;
 /// <param name="SaveDir">Folder the final <c>.npz</c> is written to.</param>
 /// <param name="Channels">Active AI channel numbers, in the spool file order.</param>
 /// <param name="TriggerSampleIndex">AI sample index of the first trigger edge, or null if none.</param>
-/// <param name="Sh">Four-digit, zero-padded experiment serial used in the file name (the <c>T{Sh}</c> prefix).</param>
+/// <param name="ExperimentSerial">Four-digit, zero-padded experiment serial used in the file name (the <c>T{serial}</c> prefix).</param>
 /// <param name="Rn">Run number used in the file name.</param>
 public sealed record FinalizeRequest(
     string TempDir,
@@ -16,7 +16,7 @@ public sealed record FinalizeRequest(
     string SaveDir,
     IReadOnlyList<int> Channels,
     long? TriggerSampleIndex,
-    string Sh,
+    string ExperimentSerial,
     int Rn);
 
 /// <summary>How far along a merge is, for a progress bar.</summary>
@@ -47,7 +47,7 @@ public static class FinalizeJob
         ArgumentNullException.ThrowIfNull(request);
 
         string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-        string fileName = $"T{request.Sh}-raw-run{request.Rn.ToString(CultureInfo.InvariantCulture)}-{timestamp}.npz";
+        string fileName = $"T{request.ExperimentSerial}-raw-run{request.Rn.ToString(CultureInfo.InvariantCulture)}-{timestamp}.npz";
         string outPath = Path.Combine(request.SaveDir, fileName);
 
         long totalBytes = request.SamplesPerChannel * sizeof(double) * request.Channels.Count;

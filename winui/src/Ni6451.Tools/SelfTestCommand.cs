@@ -102,7 +102,7 @@ internal static class SelfTestCommand
             int[] channels = [0, 3, 7];
             const int samples = 1000;
 
-            var spool = new ChannelSpool(workDir, channels, new SpoolManifest { Sh = "0207", Rn = 5 });
+            var spool = new ChannelSpool(workDir, channels, new SpoolManifest { ExperimentSerial = "0207", Rn = 5 });
             var chunk = new double[channels.Length * samples];
             for (int c = 0; c < channels.Length; c++)
                 for (int i = 0; i < samples; i++)
@@ -150,7 +150,7 @@ internal static class SelfTestCommand
             const int samples = 800;
 
             // Simulate a run that was killed: data spooled, manifest present, never finalized.
-            var spool = new ChannelSpool(workDir, channels, new SpoolManifest { Sh = "0311", Rn = 9 });
+            var spool = new ChannelSpool(workDir, channels, new SpoolManifest { ExperimentSerial = "0311", Rn = 9 });
             spool.TriggerIndexSource = () => 42L;
 
             var chunk = new double[channels.Length * samples];
@@ -169,7 +169,7 @@ internal static class SelfTestCommand
             OrphanedSpool orphan = orphans[0];
             Check("recovery: sample count is re-derived from the file lengths",
                 orphan.RecoverableSamplesPerChannel == samples);
-            Check("recovery: run numbering survives", orphan.Manifest.Sh == "0311" && orphan.Manifest.Rn == 9);
+            Check("recovery: run numbering survives", orphan.Manifest.ExperimentSerial == "0311" && orphan.Manifest.Rn == 9);
             Check("recovery: trigger index survives", orphan.Manifest.TriggerSampleIndex == 42L);
 
             string outPath = SpoolRecovery.Recover(orphan, workDir);

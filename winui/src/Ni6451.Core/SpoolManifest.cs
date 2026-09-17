@@ -26,8 +26,8 @@ public sealed class SpoolManifest
 
     public string StartedUtc { get; set; } = string.Empty;
 
-    /// <summary>Experiment serial, four digits zero-padded. Kept as <c>Sh</c> in the JSON so older manifests still load.</summary>
-    public string Sh { get; set; } = "0000";
+    /// <summary>Experiment serial, four digits zero-padded; the <c>T{serial}</c> prefix of the recording's file name.</summary>
+    public string ExperimentSerial { get; set; } = "0000";
 
     public int Rn { get; set; }
 
@@ -155,7 +155,7 @@ public static class SpoolRecovery
             saveDir,
             orphan.Manifest.Channels,
             orphan.Manifest.TriggerSampleIndex >= 0 ? orphan.Manifest.TriggerSampleIndex : null,
-            orphan.Manifest.Sh,
+            orphan.Manifest.ExperimentSerial,
             orphan.Manifest.Rn);
 
         return FinalizeJob.Run(request, progress);

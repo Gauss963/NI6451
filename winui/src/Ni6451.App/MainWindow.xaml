@@ -140,7 +140,7 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBox x:Name="ShBox" Grid.Column="0" Header="Experiment serial" MaxLength="4" TextChanged="OnNamingChanged" />
+                                    <TextBox x:Name="SerialBox" Grid.Column="0" Header="Experiment serial" MaxLength="4" TextChanged="OnNamingChanged" />
                                     <NumberBox x:Name="RnBox" Grid.Column="1" Header="Run" SpinButtonPlacementMode="Compact" SmallChange="1" ValueChanged="OnRunNumberChanged" />
                                 </Grid>
 

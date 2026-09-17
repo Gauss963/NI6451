@@ -10,8 +10,7 @@ namespace Ni6451.Core;
 /// the run number counting up within that day.
 ///
 /// Persisted as a small JSON file. The file name prefix in recordings is still
-/// <c>T{serial}</c>, and the manifest still stores the serial under <c>Sh</c>, so nothing
-/// written by an earlier version becomes unreadable.
+/// <c>T{serial}</c>, so recordings written by earlier versions are named the same way.
 /// </summary>
 public sealed class NamingState
 {
