@@ -30,28 +30,20 @@ public static class UnitConversion
     private const double Mm = 1e-3;
     private const double FaultLengthM = 500 * Mm;
 
-    // Normal-stress line (ai0).
-    private const double PressureSlope = 60.482;
-    private const double PressureIntercept = -5.497;
-
-    // Shear-stress line (ai1), calibrated in place against the e-pump pressure (T0238, T0239):
-    // the e-pump reading with the pump stopped (no flow, so no line drop), six points from 346 to
-    // 1485 psi, and 0 psi with the line unloaded (-16.5 mV). The normal-line conversion read
-    // 70-94 psi low on this line.
-    private const double ShearPressureSlope = 59.147;
-    private const double ShearPressureIntercept = 1.254;
+    // Both pressure lines (ai0 normal, ai1 shear), calibrated in place against the e-pump
+    // (T0238, T0239): the e-pump reading with the pump stopped (no flow, so no line drop), six
+    // points from 346 to 1485 psi on the shear line, and 0 psi with the line unloaded (-16.5 mV).
+    // The former conversion, P = 60.482 V - 5.497 bar, read 70-94 psi low.
+    private const double PressureSlope = 59.147;
+    private const double PressureIntercept = 1.254;
 
     private const double LvdtSlope = 0.504;
     private const double LvdtIntercept = 8.946;
     private const double Cm = 1e-2;
 
-    /// <summary>Oil pressure in Pa of the normal-stress line (ai0).</summary>
+    /// <summary>Oil pressure in Pa.</summary>
     public static double GetOilPressure(double voltage)
         => (PressureSlope * voltage + PressureIntercept) * 1e5;
-
-    /// <summary>Oil pressure in Pa of the shear-stress line (ai1).</summary>
-    public static double GetShearOilPressure(double voltage)
-        => (ShearPressureSlope * voltage + ShearPressureIntercept) * 1e5;
 
     /// <summary>
     /// Normal stress in Pa. For <see cref="FaultType.TwoD"/> the fault thickness is
@@ -92,7 +84,7 @@ public static class UnitConversion
             faultThicknessM = 500 * Mm;
         }
 
-        double pressure = GetShearOilPressure(voltage);
+        double pressure = GetOilPressure(voltage);
         double faultArea = faultThicknessM * FaultLengthM;
         return pressure * pistonArea / faultArea;
     }
