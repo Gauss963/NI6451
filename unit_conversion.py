@@ -1,18 +1,10 @@
 def get_oil_pressure(voltage):
-    """Oil pressure (Pa) of the normal-stress line (ai0)."""
-    
-    p_slope = 60.482 
-    p_intercept = -5.497
-    
-    return (p_slope * voltage + p_intercept) * 1e5
+    """Oil pressure (Pa) of either pressure line (ai0 normal, ai1 shear).
 
-def get_shear_oil_pressure(voltage):
-    """Oil pressure (Pa) of the shear-stress line (ai1).
-
-    Calibrated in place against the e-pump pressure (T0238, T0239): the e-pump
-    reading with the pump stopped (no flow, so no line drop), six points from 346
-    to 1485 psi, and 0 psi with the line unloaded (-16.5 mV). The former
-    conversion (that of get_oil_pressure) read 70-94 psi low on this line.
+    Calibrated in place against the e-pump (T0238, T0239): the e-pump reading
+    with the pump stopped (no flow, so no line drop), six points from 346 to
+    1485 psi on the shear line, and 0 psi with the line unloaded (-16.5 mV).
+    The former conversion, P = 60.482 V - 5.497 bar, read 70-94 psi low.
     """
     
     p_slope = 59.147
@@ -50,7 +42,7 @@ def get_shear_stress(voltage, fault_type, fault_thickness):
         piston_area = 12.67e-3 * m * m * 3
         fault_thickness = 500 * mm
     
-    pressure = get_shear_oil_pressure(voltage)
+    pressure = get_oil_pressure(voltage)
     fault_area = fault_thickness * fault_length
     shear_stress = pressure * piston_area / fault_area
     
