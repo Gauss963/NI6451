@@ -59,12 +59,11 @@ All tunable parameters (sample rate, chunk size, flush interval, plot refresh ra
 - AI channels use RSE (single-ended) mode with a ±10 V range.
 - Only the channels selected in the UI are added to the acquisition task; leaving unused channels unselected avoids exposing them to multiplexer ghosting from active neighboring channels.
 - The live plot is decimated for display purposes only — the data written to disk is always full-rate.
-- Stresses on the live plot come from [unit_conversion.py](unit_conversion.py). Each pressure line has its own
-  voltage-to-oil-pressure conversion: the normal line (ai0) `P = 60.482 V - 5.497` bar, and the shear line (ai1)
-  `P = 59.147 V + 1.254` bar. The shear line was calibrated in place against the e-pump pressure in T0238 and
-  T0239: the e-pump reading with the pump stopped (no flow), six points from 346 to 1485 psi, and 0 psi with the
-  line unloaded (-16.5 mV). With the pump running at 8 mL/min the e-pump reads 24-29 psi more than the piston
-  side, the pressure drop along the line, so readings taken with flow are not used for the calibration.
+- Stresses on the live plot come from [unit_conversion.py](unit_conversion.py). Both pressure lines (ai0 normal, ai1
+  shear) use `P = 59.147 V + 1.254` bar, calibrated in place against the e-pump in T0238 and T0239: the e-pump reading
+  with the pump stopped (no flow), six points from 346 to 1485 psi on the shear line, and 0 psi with the line unloaded
+  (-16.5 mV). With the pump running at 8 mL/min the e-pump reads 24-29 psi more than the piston side, the pressure
+  drop along the line, so readings taken with flow are not used for the calibration.
 
 ## C# / WinUI 3 port
 

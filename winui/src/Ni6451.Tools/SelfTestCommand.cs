@@ -362,10 +362,9 @@ internal static class SelfTestCommand
     private static void TestUnitConversion()
     {
         // Reference values computed from the Python unit_conversion.py on the main branch.
-        Check("units: oil pressure, normal line", Close(UnitConversion.GetOilPressure(1.0), 5_498_500.0));
-        Check("units: oil pressure, shear line", Close(UnitConversion.GetShearOilPressure(1.0), 6_040_100.0));
+        Check("units: oil pressure", Close(UnitConversion.GetOilPressure(1.0), 6_040_100.0));
         Check("units: 1D normal stress",
-            Close(UnitConversion.GetNormalStress(1.0, FaultType.OneD, 0.05), 4_097_482.2));
+            Close(UnitConversion.GetNormalStress(1.0, FaultType.OneD, 0.05), 4_501_082.52));
         Check("units: 2D shear stress ignores the thickness argument",
             Close(UnitConversion.GetShearStress(1.0, FaultType.TwoD, 0.05), 918_336.804)
             && Close(UnitConversion.GetShearStress(1.0, FaultType.TwoD, 0.10),
